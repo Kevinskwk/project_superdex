@@ -1,0 +1,26 @@
+{
+  "source_commit": "f815b82fdf3451852acd918933020a82cede1f3b",
+  "method": "structured_bounds",
+  "resolution": [
+    7,
+    9,
+    2
+  ],
+  "num_nodes": 126,
+  "num_tetrahedra": 240,
+  "num_constrained_nodes": 63,
+  "bounds_m": [
+    [
+      -0.010875,
+      -0.072375,
+      -0.01125
+    ],
+    [
+      0.009875,
+      -0.047125,
+      -0.00725
+    ]
+  ],
+  "contact_surface_axis": "-Z",
+  "volume_note": "Regular volume uses the exact source bounds; rounded edge detail remains in the visual source mesh."
+}
