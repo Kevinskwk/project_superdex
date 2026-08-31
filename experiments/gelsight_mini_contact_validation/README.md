@@ -136,11 +136,13 @@ RGB, both normal/shear fields, and the direct/inferred wrench traces:
 ```
 
 The RGB recorder adds both 7×9 shear panels, direct/inferred force and torque
-traces, and live tool/EE slip. It refuses to publish a video if task-induced
-slip exceeds 12 mm or bilateral contact falls below 80%. Task trajectories use
-zero-velocity smooth pulses; the peeler is capped at 3 mm and 8 degrees and the
-tip stroke at 8 mm and 10 degrees. The default grip is 28 N per finger and the
-benchmarked gel/tool friction coefficient is 1.4.
+traces, and live tool/EE slip. Campaign retention requires at most 12 mm
+translation, at most 25 degrees relative rotation, and bilateral gel contact
+for at least 80% of active motion. Task trajectories use zero-velocity smooth
+pulses; rolling is capped at 2 mm and 4.6 degrees, peeling at 3 mm and 8 degrees,
+and the tip stroke at 8 mm and 10 degrees. Full campaigns use the Franka Hand's
+70 N total grip limit (35 N per finger) and the benchmarked gel/tool friction
+coefficient 1.4. The standalone RGB recorder retains its gentler 28 N setting.
 
 Re-run the friction/retention sweep with:
 

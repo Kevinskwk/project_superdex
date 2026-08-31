@@ -82,6 +82,7 @@ def launch_workers(
     specs: list[EpisodeSpec], output: Path, processes: int, parallel_envs: int,
     worker_threads: int, steps: int, dt: float, compression: str,
     core_pool: list[list[int]], label: str, gel_friction: float = 1.4,
+    grip_force_n: float = 28.0,
 ) -> dict[str, Any]:
     spec_root, shard_root = output / f"{label}_specs", output / f"{label}_shards"
     spec_root.mkdir(parents=True, exist_ok=True)
@@ -111,6 +112,7 @@ def launch_workers(
             "--parallel-envs", str(min(parallel_envs, len(partition))),
             "--worker-threads", str(worker_threads), "--dt", str(dt),
             "--compression", compression, "--gel-friction", str(gel_friction),
+            "--grip-force-n", str(grip_force_n),
         ]
         log_path = shard_root / f"shard_{index:03d}.log"
         log = log_path.open("w")
@@ -152,6 +154,7 @@ def launch_workers(
     return {
         "label": label, "processes": processes, "parallel_envs": parallel_envs,
         "worker_threads": worker_threads, "steps": steps, "frames": frames,
+        "gel_friction": gel_friction, "grip_force_per_finger_n": grip_force_n,
         "wall_seconds": effective_wall, "aggregate_environment_fps": frames / max(effective_wall, 1e-9),
         "cpu_percent_mean": float(np.mean(cpu_samples)) if cpu_samples else float("nan"),
         "cpu_percent_peak": float(np.max(cpu_samples)) if cpu_samples else float("nan"),
@@ -285,6 +288,33 @@ def aggregate_report(
         return rows
 
     valid_metrics = [value for value in metrics.values() if value["physical_valid"]]
+
+    def metric_stats(key: str, values: list[dict[str, Any]]) -> dict[str, float]:
+        samples = np.asarray([value[key] for value in values], dtype=float)
+        samples = samples[np.isfinite(samples)]
+        return {
+            "median": float(np.median(samples)),
+            "p05": float(np.percentile(samples, 5)),
+            "p95": float(np.percentile(samples, 95)),
+        }
+
+    wrench_fidelity = {
+        "dense_field_vs_direct_gel_contact": {
+            "pass_rate": float(np.mean([value["dense_pass"] for value in metrics.values()])),
+            "force_relative_p95": metric_stats("dense_force_rel_p95", valid_metrics),
+            "force_absolute_p95_n": metric_stats("dense_force_abs_p95_n", valid_metrics),
+            "torque_absolute_p95_nm": metric_stats("dense_torque_abs_p95_nm", valid_metrics),
+            "force_cosine_p05": metric_stats("dense_force_cosine_p05", valid_metrics),
+            "centroid_p95_m": metric_stats("dense_centroid_p95_m", valid_metrics),
+        },
+        "field_inferred_vs_tool_table_contact": {
+            "pass_rate": float(np.mean([value["environment_pass"] for value in valid_metrics])),
+            "force_nrmse": metric_stats("environment_force_nrmse", valid_metrics),
+            "torque_nrmse": metric_stats("environment_torque_nrmse", valid_metrics),
+            "force_correlation": metric_stats("environment_force_correlation", valid_metrics),
+            "cop_p95_m": metric_stats("cop_p95_m", valid_metrics),
+        },
+    }
     repeat_groups: dict[tuple[str, str], list[float]] = defaultdict(list)
     for spec in specs:
         if spec.campaign_block == "standard":
@@ -303,11 +333,26 @@ def aggregate_report(
         "master_hdf5": str(master), "hdf5_bytes_including_shards": hdf5_bytes,
         "hdf5_gib_including_shards": hdf5_bytes / 2**30,
         "physical_valid_rate": float(np.mean([v["physical_valid"] for v in metrics.values()])),
+        "grasp_retention_rate": float(np.mean([v["grasp_retained"] for v in metrics.values()])),
+        "grasp_slip_max_mm": float(max(v["grasp_slip_max_m"] for v in metrics.values()) * 1000),
+        "grasp_slip_p99_mm": float(np.percentile(
+            [v["grasp_slip_max_m"] for v in metrics.values()], 99
+        ) * 1000),
+        "grasp_rotation_max_deg": float(max(
+            v["grasp_rotation_max_deg"] for v in metrics.values()
+        )),
+        "bilateral_grasp_fraction_min": float(min(
+            v["bilateral_grasp_fraction"] for v in metrics.values()
+        )),
+        "episodes_without_environment_contact": int(sum(
+            v["environment_contact_frames"] == 0 for v in metrics.values()
+        )),
         "dense_pass_rate": float(np.mean([v["dense_pass"] for v in metrics.values()])),
         "environment_pass_rate": float(np.mean([v["environment_pass"] for v in metrics.values()])),
         "environment_pass_rate_on_valid": float(
             np.mean([v["environment_pass"] for v in valid_metrics])
         ),
+        "wrench_fidelity": wrench_fidelity,
         "repeatability_cv_median": float(np.median(cvs)) if cvs else float("nan"),
         "repeatability_cv_p95": float(np.percentile(cvs, 95)) if cvs else float("nan"),
         "speedup_vs_previous_32_61_env_fps": result["aggregate_environment_fps"] / LEGACY_BASELINE_FPS,
@@ -347,6 +392,8 @@ def aggregate_report(
         f"{row['environment_pass_rate']:.1%} | {row['force_nrmse_median']:.3f} | "
         f"{row['torque_nrmse_median']:.3f} |" for row in failed
     ) or "| none | — | — | — | — | — | — | — |"
+    dense_wrench = wrench_fidelity["dense_field_vs_direct_gel_contact"]
+    external_wrench = wrench_fidelity["field_inferred_vs_tool_table_contact"]
     (output / "campaign_report.md").write_text(
         "# SCFields tool-use tactile fidelity campaign\n\n"
         f"Collected **{len(specs):,} episodes × {result['steps']} steps = "
@@ -356,6 +403,12 @@ def aggregate_report(
         f"- Mean/peak host CPU: **{result['cpu_percent_mean']:.1f}% / {result['cpu_percent_peak']:.1f}%**\n"
         f"- Peak worker RSS: **{result['peak_rss_gib']:.2f} GiB**\n"
         f"- Physical validity: **{summary['physical_valid_rate']:.1%}**\n"
+        f"- Grasp retention: **{summary['grasp_retention_rate']:.1%}** "
+        f"(max/p99 slip {summary['grasp_slip_max_mm']:.2f}/{summary['grasp_slip_p99_mm']:.2f} mm; "
+        f"max relative rotation {summary['grasp_rotation_max_deg']:.2f} deg; "
+        f"minimum bilateral contact {summary['bilateral_grasp_fraction_min']:.1%})\n"
+        f"- Episodes without tool/table contact: "
+        f"**{summary['episodes_without_environment_contact']}**\n"
         f"- Dense gel-field fidelity pass: **{summary['dense_pass_rate']:.1%}**\n"
         f"- Dynamic environment-wrench pass: **{summary['environment_pass_rate']:.1%}**\n"
         f"- Dynamic environment-wrench pass among physically valid grasps: "
@@ -364,6 +417,17 @@ def aggregate_report(
         f"{summary['repeatability_cv_p95']:.1%}**\n\n"
         "The thresholds test simulator-internal consistency and causality against Mochi contact "
         "ground truth. They are not a calibration claim for a physical GelSight Mini.\n\n"
+        "## Wrench comparison\n\n"
+        f"- Dense field vs direct gel contact: median episode force relative-p95 "
+        f"**{dense_wrench['force_relative_p95']['median']:.3f}**, force absolute-p95 "
+        f"**{dense_wrench['force_absolute_p95_n']['median']:.3f} N**, torque absolute-p95 "
+        f"**{dense_wrench['torque_absolute_p95_nm']['median']:.4f} N m**, and force-direction "
+        f"cosine-p05 **{dense_wrench['force_cosine_p05']['median']:.3f}**.\n"
+        f"- Field/inertia-inferred vs direct tool/table contact: median force NRMSE "
+        f"**{external_wrench['force_nrmse']['median']:.3f}**, torque NRMSE "
+        f"**{external_wrench['torque_nrmse']['median']:.3f}**, force correlation "
+        f"**{external_wrench['force_correlation']['median']:.3f}**, and CoP-p95 "
+        f"**{external_wrench['cop_p95_m']['median']*1000:.2f} mm**.\n\n"
         "## Results by campaign block\n\n"
         "| Block | N | Valid | Dense pass | Environment pass (valid) | Force NRMSE | Torque NRMSE | Force corr. | CoP p95 |\n"
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|\n" + block_rows + "\n\n"
@@ -400,6 +464,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parallel-envs", type=int)
     parser.add_argument("--worker-threads", type=int)
     parser.add_argument("--compression", choices=("lzf", "gzip", "none"), default="lzf")
+    parser.add_argument("--gel-friction", type=float, default=1.4)
+    parser.add_argument(
+        "--grip-force-n", type=float, default=35.0,
+        help="Inward effort per finger; use at most 35 N for the 70 N Franka Hand limit.",
+    )
     parser.add_argument("--smoke-test", action="store_true")
     args = parser.parse_args()
     if args.smoke_test:
@@ -407,6 +476,8 @@ def parse_args() -> argparse.Namespace:
         args.processes, args.parallel_envs, args.worker_threads = 2, 4, 2
     if not 0.0 <= args.reserve_physical_cores < 1.0:
         parser.error("--reserve-physical-cores must be in [0, 1)")
+    if not 0.0 < args.grip_force_n <= 35.0:
+        parser.error("--grip-force-n must be in (0, 35] N per finger")
     return args
 
 
@@ -466,7 +537,7 @@ def main() -> None:
     )
     result = launch_workers(
         specs, output, processes, parallel_envs, worker_threads, args.steps, args.dt,
-        args.compression, usable, "campaign",
+        args.compression, usable, "campaign", args.gel_friction, args.grip_force_n,
     )
     shard_paths = [Path(path) for path in result["shards"]]
     master = assemble_master(output, shard_paths, specs)

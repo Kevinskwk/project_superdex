@@ -172,7 +172,8 @@ def main() -> None:
         raise RuntimeError(
             f"refusing to publish dropped-tool video: max slip "
             f"{metrics['grasp_slip_max_m']*1000:.1f} mm, bilateral "
-            f"{metrics['bilateral_grasp_fraction']:.1%}"
+            f"{metrics['bilateral_grasp_fraction']:.1%}, relative rotation "
+            f"{metrics['grasp_rotation_max_deg']:.1f} deg"
         )
     video = output / f"episode_{args.episode_id:06d}_{spec.tool_name}_{spec.protocol}_rgb.mp4"
     compose_video(recorder.frames, data, spec, metrics, video, args.fps)

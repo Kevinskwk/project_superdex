@@ -122,7 +122,11 @@ def motion_command(spec: EpisodeSpec, progress: float) -> tuple[np.ndarray, np.n
         translation[0] = 0.006 * pulse
         translation[1] = 0.003 * wave
         rotation[2] = np.deg2rad(7.0) * pulse
+        if spec.campaign_block == "orientation":
+            translation *= 0.25
+            rotation *= 0.25
     if protocol == "rolling":
+        translation[0] = 0.002 * pulse
         rotation[1] = -translation[0] / 0.025
     if protocol == "tip_stroke":
         rotation[1] = np.deg2rad(10.0) * pulse
@@ -200,7 +204,13 @@ def make_environment(
         "xy", [spec.tool_roll_deg, spec.tool_pitch_deg], degrees=True
     )
     env.tool_position = 0.5 * (gel_centers["left"] + gel_centers["right"])
-    env.tool_position += np.array([0.0, 0.0, -0.018])
+    grasp_z_offset = (
+        -0.009
+        if spec.tool_name in {"peeler_7", "peeler_10"}
+        and spec.campaign_block == "orientation"
+        else -0.018
+    )
+    env.tool_position += np.array([0.0, 0.0, grasp_z_offset])
     tool_shape = physics.load_shape_from_file(record["canonical_path"])
     contact = physics.ContactParams()
     contact.coulomb_friction_coefficient = float(record["friction"]) * spec.friction_scale
@@ -416,10 +426,15 @@ def collect_cohort(
             finger_force = -grip_force_n * grasp_q * grasp_q * (3.0 - 2.0 * grasp_q)
             delta_z = 0.0
             if phase == 2:
-                delta_z = -0.00035
+                delta_z = -0.00065 if env.spec.campaign_block == "orientation" else -0.00035
                 env.ee_z_command += delta_z
             elif phase == 3:
-                error = env.filtered_env_force - env.spec.target_force_n
+                target_force_n = (
+                    min(env.spec.target_force_n, 5.0)
+                    if env.spec.campaign_block == "orientation"
+                    else env.spec.target_force_n
+                )
+                error = env.filtered_env_force - target_force_n
                 delta_z = float(np.clip(0.00010 * error, -0.00025, 0.00025))
                 env.ee_z_command += delta_z
             elif phase == 4:
@@ -561,6 +576,19 @@ def _lag(estimate: np.ndarray, truth: np.ndarray, maximum: int = 10) -> int:
     return int(list(lags)[int(np.argmax(scores))])
 
 
+def relative_grasp_rotation_deg(
+    ee_quaternions: np.ndarray,
+    tool_quaternions: np.ndarray,
+    reference_indices: np.ndarray,
+) -> np.ndarray:
+    """Return tool/EE rotation change without the rotation-vector pi discontinuity."""
+    relative = Rotation.from_quat(ee_quaternions).inv() * Rotation.from_quat(
+        tool_quaternions
+    )
+    reference = relative[reference_indices].mean()
+    return np.rad2deg((reference.inv() * relative).magnitude())
+
+
 def episode_metrics(
     data: dict[str, np.ndarray], row: int, spec: EpisodeSpec, dt: float = 0.01
 ) -> dict[str, Any]:
@@ -594,20 +622,31 @@ def episode_metrics(
         reference = np.median(relative_position[reference_indices], axis=0)
         active_motion = data["contact_phase"][row] == 3
         slip = np.linalg.norm(relative_position - reference, axis=1)
+        # Rotation vectors are discontinuous at pi, so a componentwise median
+        # can turn an unchanged near-pi grasp into a false 180-degree flip.
+        rotation_slip_deg = relative_grasp_rotation_deg(
+            ee_pose[:, 3:], tool_pose[:, 3:], reference_indices
+        )
         bilateral = (
             (data["left_contact_count"][row] > 0)
             & (data["right_contact_count"][row] > 0)
         )
         result["grasp_slip_max_m"] = float(np.max(slip[active_motion]))
         result["grasp_slip_final_m"] = float(slip[np.flatnonzero(active_motion)[-1]])
+        result["grasp_rotation_max_deg"] = float(np.max(rotation_slip_deg[active_motion]))
+        result["grasp_rotation_final_deg"] = float(
+            rotation_slip_deg[np.flatnonzero(active_motion)[-1]]
+        )
         result["bilateral_grasp_fraction"] = float(np.mean(bilateral[active_motion]))
         result["grasp_retained"] = bool(
             result["grasp_slip_max_m"] <= 0.012
+            and result["grasp_rotation_max_deg"] <= 25.0
             and result["bilateral_grasp_fraction"] >= 0.80
         )
     else:
         result.update(
             grasp_slip_max_m=float("nan"), grasp_slip_final_m=float("nan"),
+            grasp_rotation_max_deg=float("nan"), grasp_rotation_final_deg=float("nan"),
             bilateral_grasp_fraction=float("nan"), grasp_retained=False,
         )
     if tactile_mask.any():
@@ -793,9 +832,16 @@ def write_shard(
                 labels["physical_valid"] = np.bool_(metrics[spec.episode_id]["physical_valid"])
                 labels["dense_fidelity_pass"] = np.bool_(metrics[spec.episode_id]["dense_pass"])
                 labels["environment_fidelity_pass"] = np.bool_(metrics[spec.episode_id]["environment_pass"])
-                labels["grasp_retained"] = np.bool_(metrics[spec.episode_id]["grasp_retained"])
-                labels["imitation_eligible"] = np.bool_(metrics[spec.episode_id]["physical_valid"])
-                labels["task_success"] = np.bool_(metrics[spec.episode_id]["environment_contact_frames"] > 0)
+                retained = metrics[spec.episode_id]["grasp_retained"]
+                labels["grasp_retained"] = np.bool_(retained)
+                labels["imitation_eligible"] = np.bool_(
+                    metrics[spec.episode_id]["physical_valid"] and retained
+                )
+                labels["task_success"] = np.bool_(
+                    metrics[spec.episode_id]["physical_valid"]
+                    and retained
+                    and metrics[spec.episode_id]["environment_contact_frames"] > 0
+                )
         group = stream.create_group("benchmark")
         for key, value in benchmark.items():
             if isinstance(value, (str, bool, int, float, np.number)):
@@ -819,8 +865,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stiffness-damping", type=float, default=0.003)
     parser.add_argument("--gel-friction", type=float, default=1.4)
     parser.add_argument(
-        "--grip-force-n", type=float, default=28.0,
-        help="Inward effort per Franka finger; 28 N gives a 56 N total grip.",
+        "--grip-force-n", type=float, default=35.0,
+        help="Inward effort per Franka finger; 35 N gives the Franka Hand's 70 N total limit.",
     )
     return parser.parse_args()
 

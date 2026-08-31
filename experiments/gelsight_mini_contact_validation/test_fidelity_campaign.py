@@ -3,13 +3,18 @@ from pathlib import Path
 import sys
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from campaign_specs import build_campaign  # noqa: E402
-from fidelity_campaign import motion_command, wrench_cop  # noqa: E402
+from fidelity_campaign import (  # noqa: E402
+    motion_command,
+    relative_grasp_rotation_deg,
+    wrench_cop,
+)
 
 
 def tool_records():
@@ -93,3 +98,20 @@ def test_peel_and_tip_stroke_are_bounded():
         commands = [motion_command(spec, value) for value in np.linspace(0.48, 0.90, 101)]
         assert max(np.linalg.norm(value[0]) for value in commands) <= translation_limit
         assert max(np.linalg.norm(value[1]) for value in commands) <= rotation_limit
+
+
+def test_rolling_motion_is_gentle_and_continuous():
+    spec = next(item for item in build_campaign(tool_records()) if item.protocol == "rolling")
+    commands = [motion_command(spec, value) for value in np.linspace(0.48, 0.90, 101)]
+    assert max(np.linalg.norm(value[0]) for value in commands) <= 0.00201
+    assert max(np.linalg.norm(value[1]) for value in commands) <= np.deg2rad(4.6)
+    np.testing.assert_allclose(commands[0][0], 0.0, atol=1e-12)
+    np.testing.assert_allclose(commands[-1][0], 0.0, atol=1e-12)
+
+
+def test_relative_rotation_is_continuous_across_pi():
+    ee = Rotation.identity(12).as_quat()
+    angles = np.deg2rad([179.9, -179.9] * 5 + [180.0, -180.0])
+    tool = Rotation.from_rotvec(angles[:, None] * np.array([[1.0, 0.0, 0.0]])).as_quat()
+    change = relative_grasp_rotation_deg(ee, tool, np.arange(10))
+    assert float(change.max()) < 0.11
