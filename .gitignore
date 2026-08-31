@@ -29,3 +29,7 @@ SuperDexStudio.ini
 audit_reports/
 default.profraw
 *.egg-info/
+
+# Downloaded/generated SCFields meshes are prepared locally by
+# experiments/gelsight_mini_contact_validation/scfields_assets.py.
+/assets/scfields/
