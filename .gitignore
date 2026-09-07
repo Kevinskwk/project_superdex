@@ -33,3 +33,4 @@ default.profraw
 # Downloaded/generated SCFields meshes are prepared locally by
 # experiments/gelsight_mini_contact_validation/scfields_assets.py.
 /assets/scfields/
+/.venv_probe/
