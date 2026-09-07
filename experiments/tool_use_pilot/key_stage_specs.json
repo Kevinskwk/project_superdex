@@ -1,0 +1,6 @@
+[
+  {"episode_id": 0, "stage": "insertion", "case": "aligned", "contact_edge_m": 0.008},
+  {"episode_id": 1, "stage": "insertion", "case": "lateral_miss", "lateral_m": 0.003, "contact_edge_m": 0.008},
+  {"episode_id": 2, "stage": "turning", "case": "aligned", "contact_edge_m": 0.016},
+  {"episode_id": 3, "stage": "turning", "case": "hold_control", "contact_edge_m": 0.016}
+]

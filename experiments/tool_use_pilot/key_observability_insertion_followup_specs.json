@@ -1,0 +1,8 @@
+[
+  {"episode_id": 212, "stage": "insertion", "case": "aligned_small_positive", "lateral_m": 0.00005, "yaw_deg": -2, "contact_edge_m": 0.008, "group": "insertion_yaw_minus2"},
+  {"episode_id": 213, "stage": "insertion", "case": "offset_larger_positive", "lateral_m": 0.003, "yaw_deg": -2, "contact_edge_m": 0.008, "group": "insertion_yaw_minus2"},
+  {"episode_id": 214, "stage": "insertion", "case": "aligned_small_positive", "lateral_m": 0.00005, "yaw_deg": 0, "contact_edge_m": 0.008, "group": "insertion_yaw_zero"},
+  {"episode_id": 215, "stage": "insertion", "case": "offset_larger_positive", "lateral_m": 0.003, "yaw_deg": 0, "contact_edge_m": 0.008, "group": "insertion_yaw_zero"},
+  {"episode_id": 216, "stage": "insertion", "case": "aligned_small_positive", "lateral_m": 0.00005, "yaw_deg": 2, "contact_edge_m": 0.008, "group": "insertion_yaw_plus2"},
+  {"episode_id": 217, "stage": "insertion", "case": "offset_larger_positive", "lateral_m": 0.003, "yaw_deg": 2, "contact_edge_m": 0.008, "group": "insertion_yaw_plus2"}
+]
