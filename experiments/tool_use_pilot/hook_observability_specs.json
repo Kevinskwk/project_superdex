@@ -1,0 +1,10 @@
+[
+  {"kind":"hook","revision":6,"episode_id":100,"seed":20260908,"group":"observability-low-captured-positive","case":"captured","offset":0.0363,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":101,"seed":20260908,"group":"observability-low-miss-positive","case":"near_miss","offset":0.0443,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":102,"seed":20260908,"group":"observability-low-captured-negative","case":"captured","offset":-0.0363,"mirror_fixture":true,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":103,"seed":20260908,"group":"observability-low-miss-negative","case":"near_miss","offset":-0.0443,"mirror_fixture":true,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":104,"seed":20260909,"group":"observability-high-captured-positive","case":"captured","offset":0.0387,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":105,"seed":20260909,"group":"observability-high-miss-positive","case":"near_miss","offset":0.0467,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":106,"seed":20260909,"group":"observability-high-captured-negative","case":"captured","offset":-0.0387,"mirror_fixture":true,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":107,"seed":20260909,"group":"observability-high-miss-negative","case":"near_miss","offset":-0.0467,"mirror_fixture":true,"stiffness":30,"grip_force_n":35}
+]

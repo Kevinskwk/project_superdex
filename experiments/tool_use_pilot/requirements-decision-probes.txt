@@ -1,0 +1,13 @@
+# Install torch==2.11.0 from https://download.pytorch.org/whl/cu128 first,
+# in a separate .venv_probe. Do not replace the simulation environment's torch.
+numpy==2.5.3
+scipy==1.18.1
+h5py==3.16.0
+trimesh==5.1.0
+embreex==4.4.0
+rtree==1.4.1
+scikit-learn==1.9.0
+matplotlib==3.11.1
+pillow==12.3.0
+imageio==2.37.4
+imageio-ffmpeg==0.6.0

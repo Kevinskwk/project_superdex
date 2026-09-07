@@ -1,0 +1,6 @@
+[
+  {"kind":"hook","revision":6,"episode_id":0,"group":"hook-repair-captured-positive","case":"captured","offset":0.0375,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":1,"group":"hook-repair-miss-positive","case":"near_miss","offset":0.0455,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":2,"group":"hook-repair-captured-negative","case":"captured","offset":-0.0375,"mirror_fixture":true,"stiffness":30,"grip_force_n":35},
+  {"kind":"hook","revision":6,"episode_id":3,"group":"hook-repair-miss-negative","case":"near_miss","offset":-0.0455,"mirror_fixture":true,"stiffness":30,"grip_force_n":35}
+]
