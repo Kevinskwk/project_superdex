@@ -90,7 +90,8 @@ def target(spec, t, branch):
         return np.array([x, y, z, 0, 0, np.deg2rad(yaw)])
 
     if spec.kind == "hook":
-        pull = -0.050 if spec.revision >= 5 else -0.064
+        configured_pull=getattr(spec,'hook_pull_m',None)
+        pull = -configured_pull if configured_pull is not None else (-0.050 if spec.revision >= 5 else -0.064)
         start = v(x=-0.006, z=0.018)
         knots = [
             (0, zero, "grasp"),
@@ -281,7 +282,7 @@ class HookDecision(World):
         self.recovery_wait = 0.0
         self.controller_abort = ""
         self.nominal_tool_target = np.zeros(3)
-        if spec.kind == "hook":
+        if spec.kind == "hook" and spec.task == "hook":
             self.environment_meshes = [
                 self.make_slider_mesh(),
                 trimesh.creation.box([0.16, 0.09, 0.012]),
@@ -352,7 +353,7 @@ class HookDecision(World):
         self.nominal_tool_target = value[:3].copy()
         if waiting:
             phase = "wait_recovery_clearance"
-        if self.spec.kind == "hook" and self.spec.revision >= 3 and t >= 1.5:
+        if self.spec.kind == "hook" and self.spec.revision >= 3 and t >= 1.5 and getattr(self.spec, 'tool_pose_feedback', True):
             # Privileged scripted-collector servo, NOT a policy observation.
             # Track the authored tool trajectory, not the fixture; offsets and
             # wrong recovery choices therefore remain genuine task variations.
@@ -604,6 +605,7 @@ def write_episode(path, data, spec, world, result, snapshot=None, prefix=None):
         target = world.origin + world.rot.apply(
             [0.015, 0, -0.025 if spec.kind == "hook" else -0.075]
         )
+        target = getattr(world, "camera_target_world", target)
         camera["target_world"] = target
         camera["eyes_world"] = np.stack(
             [

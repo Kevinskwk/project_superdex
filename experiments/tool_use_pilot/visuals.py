@@ -30,6 +30,7 @@ class Recorder:
         self.target = world.origin + world.rot.apply(
             [0.015, 0, -0.075 if getattr(world.spec, "kind", None) == "key" else -0.025]
         )
+        self.target = getattr(world, "camera_target_world", self.target)
         self.viewer.set_camera_view(
             self.target + world.rot.apply([0.22, -0.25, 0.13]), self.target, [0, 0, 1]
         )
@@ -59,16 +60,18 @@ class Recorder:
         draw.rectangle((8, 16, 570, 83), fill="white")
         draw.text(
             (16, 23),
-            f"{getattr(self.world.spec, 'kind', self.world.spec.task)} {getattr(self.world.spec, 'stage', '')}: {row['phase']}  t={row['timestamps']:.2f}s",
+            f"{getattr(self.world.spec, 'family', getattr(self.world.spec, 'kind', self.world.spec.task))} {getattr(self.world.spec, 'variant', getattr(self.world.spec, 'stage', ''))}: {row['phase']}  t={row['timestamps']:.2f}s",
             fill="black",
         )
         draw.text(
             (16, 44),
             (
                 f"insertion {row['insertion_depth_m'] * 1000:.1f} mm"
-                if getattr(self.world.spec, "stage", None) == "insertion"
+                if getattr(self.world.spec, "stage", None) == "insertion" and getattr(self.world.spec, "family", "insertion") in ("insertion", "composite")
                 else f"rotor {np.rad2deg(row['task_progress']):.1f} deg"
                 if getattr(self.world.spec, "kind", None) == "key"
+                else f"working tip X {row['working_tip_task_m'][0] * 1000:.1f} mm"
+                if 'working_tip_task_m' in row
                 else f"progress {row['task_progress'] * 1000:.1f} mm"
             )
             + f" | slip {row['slip_m'] * 1000:.2f} mm",
@@ -79,6 +82,9 @@ class Recorder:
             "Actual simulator RGB; prepared grasp, freely held after 1 s",
             fill="black",
         )
+        if 'blade_contact_force_n' in row:
+            draw.text((1130,420),f"Blade contact: {row['blade_contact_force_n']:.2f} N",fill='white')
+            draw.text((1130,442),f"Holder contact: {row['holder_contact_force_n']:.2f} N",fill='white')
         for j, s in enumerate(("left", "right")):
             panel = Image.fromarray(
                 render_shear_field(

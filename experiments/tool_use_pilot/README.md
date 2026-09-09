@@ -6,6 +6,28 @@ No SCFields downloads or external assets are added by this package.
 
 ## Current entry points
 
+The completed nominal feasibility results are in
+[BENCHMARK_STATUS.md](BENCHMARK_STATUS.md) and
+[VERIFICATION_20260909.md](VERIFICATION_20260909.md): all 18 retained isolated
+variants have passing full episodes, plus the insert–turn composite. This is
+not yet randomized robustness qualification.
+
+Watch one captured RGB+tactile video per variant in
+[the representative gallery](output/benchmark_representatives/README.md).
+Its manifest records the original HDF5/movie hashes and acceptance metrics.
+
+For supported scraping, explicit arm impedance/compensation, solver diagnostics
+and moment-preserving tactile wrench reconstruction, see
+[mechanics repair](MECHANICS_REPAIR.md).
+
+For the structured surface/hook/peg/turning diversity pilot, see
+[BENCHMARK.md](BENCHMARK.md), including qualification rules and limitations.
+
+New runs use the source-fitted curved gel and 2 mm marker pitch. See
+[curved-gel regression](output/curved_gel_pilot/REGRESSION.md) for the rerun,
+including retention failures and dense-versus-compact wrench checks. The older
+flat-gel data remain a reference; they were not overwritten.
+
 This document describes the original four-task baseline. For the repaired hook,
 separate key insertion/turning tasks, and noisy/occluded Point-M2AE tactile
 comparisons, start with [DECISION_PILOT.md](DECISION_PILOT.md).
@@ -169,3 +191,9 @@ physically invalid ones, are retained and scored with an invalidity penalty.
 Generated data, attempts and RGB assets stay under ignored `output/`. The final
 report lists rejected iterations and limitations instead of silently filtering
 them out of a claimed success rate.
+# Current benchmark status
+
+See [BENCHMARK_STATUS.md](BENCHMARK_STATUS.md) for the 9 September task-by-task
+status and completion checklist. Curved gel is primary, the same-topology flat
+gel is reference-only, key tasks end turned, and wrench matching is diagnostic
+rather than an episode eligibility gate. Historical recordings are preserved.

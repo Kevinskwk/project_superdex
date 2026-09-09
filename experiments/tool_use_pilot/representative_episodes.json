@@ -1,0 +1,21 @@
+[
+  {"family":"surface","variant":"flat_scrape","episode":"current/0000_surface_flat_scrape_nominal.h5"},
+  {"family":"surface","variant":"flat_draw","episode":"current/0001_surface_flat_draw_nominal.h5"},
+  {"family":"surface","variant":"cylindrical_peel","episode":"surface_sdf/0036_surface_cylindrical_peel_nominal.h5"},
+  {"family":"surface","variant":"concave_draw","episode":"curved_repairs/0029_surface_concave_draw_nominal.h5"},
+  {"family":"surface","variant":"straight_wall","episode":"guide_repairs/0022_surface_straight_wall_nominal.h5"},
+  {"family":"surface","variant":"rounded_wall","episode":"guide_complete/0040_surface_rounded_wall_nominal.h5"},
+  {"family":"surface","variant":"straight_slot","episode":"guide_confirm/0030_surface_straight_slot_nominal.h5"},
+  {"family":"surface","variant":"curved_slot","episode":"curved_slot_completion/0045_surface_curved_slot_nominal.h5"},
+  {"family":"hook","variant":"normal","episode":"hook_complete/0042_hook_normal_nominal.h5"},
+  {"family":"hook","variant":"mirrored","episode":"hook_complete/0043_hook_mirrored_nominal.h5"},
+  {"family":"insertion","variant":"round","episode":"current/0010_insertion_round_nominal.h5"},
+  {"family":"insertion","variant":"square","episode":"current/0011_insertion_square_nominal.h5"},
+  {"family":"insertion","variant":"hex","episode":"current/0012_insertion_hex_nominal.h5"},
+  {"family":"insertion","variant":"d","episode":"current/0013_insertion_d_nominal.h5"},
+  {"family":"insertion","variant":"key","episode":"current/0014_insertion_key_nominal.h5"},
+  {"family":"turning","variant":"spring","episode":"current/0015_turning_spring_nominal.h5"},
+  {"family":"turning","variant":"friction","episode":"turning_repairs/0033_turning_friction_nominal.h5"},
+  {"family":"turning","variant":"detent","episode":"current/0017_turning_detent_nominal.h5"},
+  {"family":"composite","variant":"key_sequence","episode":"composite_check/0025_composite_key_sequence_nominal.h5"}
+]

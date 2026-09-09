@@ -52,6 +52,7 @@ class Spec:
     grip_force_n: float = 0.0
     gel_modulus_pa: float = 200_000.0
     gel_friction: float = 1.4
+    gel_geometry: str = 'source_surface'
 
     def __post_init__(self):
         if self.task not in ("hook", "probe", "push", "calibration"):
@@ -191,22 +192,34 @@ class World:
         self.p, self.r, self.spec = p, r, spec
         self.scene = p.create_scene(f"pilot-{spec.episode_id}")
         self.scene.set_gravity([0, 0, -9.81])
+        if hasattr(spec, 'solver_iterations'):
+            solver = self.scene.get_solver_params()
+            solver.non_linear_solver.max_iter = spec.solver_iterations
+            solver.non_linear_solver.abs_tol = spec.solver_abs_tolerance
+            self.scene.set_solver_params(solver)
         self.context = r.create_context()
         self.gripper = build_soft_gripper(
             self.scene,
             GelMaterial(
+                geometry=spec.gel_geometry,
                 youngs_modulus_pa=spec.gel_modulus_pa,
                 friction_coefficient=spec.gel_friction,
             ),
+            ideal_arm_friction_compensation=getattr(spec,'ideal_arm_friction_compensation',False),
+            finger_coupling_stiffness_n_m=getattr(spec,'finger_coupling_stiffness_n_m',0.),
         )
         self.osc = create_osc(self.context, self.gripper)
         params = self.osc.get_params()
-        params.kp_p, params.kd_p = 1100.0, 85.0
-        params.kp_r, params.kd_r = 40.0, 4.0
+        params.kp_p = getattr(spec, 'arm_stiffness_n_m', 1100.0)
+        params.kd_p = getattr(spec, 'arm_damping_ns_m', 85.0)
+        params.kp_r = getattr(spec, 'arm_stiffness_nm_rad', 40.0)
+        params.kd_r = getattr(spec, 'arm_damping_nms_rad', 4.0)
         params.max_translation_error = 0.05
         params.max_rotation_error = 0.5
         params.b_apply_max_osc_torque_normalization = True
         self.osc.set_params(params)
+        if hasattr(self, "prepare_robot"):
+            self.prepare_robot()
         obs = self.osc.get_current_observations_from_mochi()
         self.root = obs.world_from_root
         self.ee0 = np.asarray(obs.world_from_ee_link.translation).copy()
@@ -227,6 +240,8 @@ class World:
             0,
             -0.009 if spec.task in ("hook", "probe") else -0.018,
         ]
+        if hasattr(self, "prepared_frame"):
+            self.rot, self.origin = self.prepared_frame(centers, self.rot, self.origin)
         self.mesh = self.make_tool_mesh()
         self.tool = self.actor(
             "tool", self.mesh, self.origin, self.rot, 0.08, spec.gel_friction
@@ -257,7 +272,10 @@ class World:
             self.build_environment()
         elif spec.task in ("hook", "probe"):
             self.slider0 = self.origin + self.rot.apply([0.024, spec.offset, -0.016])
-            self.axis = self.rot.apply([-1, 0, 0])
+            fixture_rotation = self.rot
+            if hasattr(self, "hook_fixture_pose"):
+                self.slider0, fixture_rotation = self.hook_fixture_pose(self.slider0)
+            self.axis = fixture_rotation.apply([-1, 0, 0])
             # Native reduced-coordinate joint enforces all five locked DOFs;
             # a penalty-based rigid guide allowed crossbar rotation under load.
             params = p.ArticulatedActorParams(name="slider_fixture")
@@ -268,7 +286,7 @@ class World:
             )
             params.world_from_root = p.TransformRT(
                 translation=self.slider0,
-                rotation=p.Quaternion.from_rotation_vector(self.rot.as_rotvec()),
+                rotation=p.Quaternion.from_rotation_vector(fixture_rotation.as_rotvec()),
             )
             params.joints = [
                 p.ArticulatedJointParams(
@@ -286,7 +304,10 @@ class World:
                 ),
             ]
             fixture_contact = p.ContactParams()
-            fixture_contact.coulomb_friction_coefficient = spec.friction
+            fixture_contact.coulomb_friction_coefficient = (
+                self.environment_friction_coefficient()
+                if hasattr(self, "environment_friction_coefficient") else spec.friction
+            )
             if getattr(spec, "revision", 0) >= 4:
                 # Millimetre-scale engagement needs a contact transition much
                 # smaller than the 8 mm crossbar (default spans 10 mm).
@@ -517,6 +538,7 @@ class World:
                 np.array([0], dtype=np.int32), [force]
             )
         self.scene.step(self.spec.dt)
+        solver_stats = self.scene.get_solver_stats()
         obs = self.osc.get_current_observations_from_mochi()
         ee = pose7(obs.world_from_ee_link, np.zeros(3))
         tf = self.tool.get_center_of_mass_transform()
@@ -530,6 +552,8 @@ class World:
         envw = np.zeros(6)
         direct = np.zeros(6)
         fieldw = np.zeros(6)
+        densew = np.zeros(6)
+        moment_corrected_w = np.zeros(6)
         contact_count = 0
         rigid_pen = 0.0
         for actor in self.env:
@@ -571,6 +595,20 @@ class World:
                 field, positions, sensor, com, negate=True
             )
             fieldw += np.r_[w.force, w.torque]
+            dense_positions, dense_forces = self.gripper.get_dense_contact_field(side)
+            if getattr(self.spec, 'record_dense_field', False):
+                row[f'gel_node_positions_world_{side}'] = dense_positions.astype(np.float32)
+                row[f'gel_node_forces_world_{side}'] = dense_forces.astype(np.float32)
+            densew -= np.r_[dense_forces.sum(axis=0),np.cross(dense_positions-com,dense_forces).sum(axis=0)]
+            from tactile_grid import surface_cell_moments
+            marker_world = transform_points(sensor, positions)
+            cell_moments, unmapped = surface_cell_moments(
+                dense_positions, dense_forces, self.gripper.gel_surface_grid_indices[side], marker_world, sensor)
+            sensor_rotation = Rotation.from_rotvec(np.asarray(sensor.rotation.to_rotation_vector()))
+            # Forces are on the gel; negate the intrinsic couples for the tool.
+            moment_corrected_w += np.r_[w.force, w.torque-sensor_rotation.apply(cell_moments.sum((0,1)))]
+            row[f'tactile_cell_moment_{side}'] = cell_moments.astype(np.float32)
+            row[f'tactile_unmapped_wrench_{side}'] = unmapped.astype(np.float32)
             w = aggregate_contact_points(
                 contacts, self.tool.get_handle(), gel.get_handle(), com
             )
@@ -660,6 +698,10 @@ class World:
             timestamps=t + self.spec.dt,
             direct_gel_wrench=direct,
             field_gel_wrench=fieldw,
+            dense_nodal_gel_wrench=densew,
+            moment_corrected_gel_wrench=moment_corrected_w,
+            moment_corrected_inferred_extrinsic_wrench=inertial-moment_corrected_w,
+            dense_nodal_inferred_extrinsic_wrench=inertial-densew,
             extrinsic_contact_wrench=envw,
             dynamic_inferred_extrinsic_wrench=inertial - fieldw,
             fixture_state=fixture,
@@ -667,6 +709,13 @@ class World:
             slip_m=slip,
             rigid_penetration_m=rigid_pen,
             angular_slip_deg=angular_slip,
+            ee_target_pose=pose7(target, np.zeros(3)),
+            commanded_joint_effort=effort.copy(),
+            finger_opening_coordinates_m=np.asarray(obs.dof_positions)[self.finger_dofs].copy(),
+            finger_synchronization_error_m=float(np.diff(np.asarray(obs.dof_positions)[self.finger_dofs])[0]),
+            solver_convergence_status=int(solver_stats.convergence_status),
+            solver_residual_norm=float(solver_stats.residual_norm),
+            solver_nonlinear_iterations=int(solver_stats.max_non_linear_iters),
             min_gel_jacobian=min_jacobian,
             guide_drift_m=guide_drift,
             contact_counts=counts,
