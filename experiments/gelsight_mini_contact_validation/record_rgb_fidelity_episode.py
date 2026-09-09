@@ -12,7 +12,7 @@ from typing import Any
 
 import imageio.v2 as imageio
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from scipy.spatial.transform import Rotation
 
 from campaign_specs import build_campaign

@@ -8,7 +8,6 @@ from dataclasses import replace
 import json
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 from campaign_specs import build_campaign

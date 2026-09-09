@@ -1,5 +1,35 @@
 # Artifact retention — 7 September 2026 work log
 
+## 9 September pilot benchmark cleanup
+
+The six studies below remain intact. Also retained: all 46 latest verification
+HDF5 recordings and their metadata/source snapshots, the curved/flat comparison,
+diversity, sensing, qualification, randomized and branch/composite datasets.
+The gallery in `output/benchmark_representatives` contains 19 byte-identical
+copies of captured RGB+tactile movies, checked for full decoding, duration,
+episode eligibility and SHA-256 integrity.
+
+Removed 172 superseded raw HDF5/video files (2.368 GiB) from `mechanics_repair`
+and the old diversity repair/debug phases. Historical reports, configurations,
+plots and source snapshots remain in place and are additionally archived in
+`output/superseded_evidence_20260909.tar.gz`; every archive member was hash-verified.
+All 643 external links in retained HDF5 datasets were checked against the
+deletion inventory before removal. No latest verification recording was removed.
+
+`CLEANUP_20260909.json` lists exact paths, sizes, hashes and archive digest.
+Deleted raw datasets/videos are **not recoverable from the archive**; rerunning
+is required. Historical reports describe original runs, including now-pruned
+raw paths; do not regenerate them from the partially retained directories.
+
+Retired hardcoded `curved_gel_regression.py` and `mechanics_validation.py` drivers
+are recoverable from `output/retired_pilot_source_20260909.tar.gz` (also nested
+inside the evidence archive). Current benchmark/report/branch/probe/render
+entry points and regression tests remain. Obsolete repair recipe factories were
+removed; explicit manifests remain supported. Branch anchors now use audited
+report eligibility, and composite prerequisites honor the turn-and-hold endpoint.
+
+The remaining sections document the earlier cleanup, not additional deletions.
+
 Cleanup executed on 8 September SGT; the experiment progress is logged under
 7 September as requested. No physics, controller, sensing, or validity threshold
 was changed by cleanup.

@@ -484,7 +484,6 @@ def collect_cohort(
             env.previous_ee_pose = ee_pose.copy()
             tool_transform = env.tool.get_center_of_mass_transform()
             tool_com_world = np.asarray(tool_transform.translation, dtype=float)
-            tool_com = tool_com_world - env.root_offset
             data["tool_pose"][row, step] = pose7(tool_transform, env.root_offset)
             data["tool_vel"][row, step, :3] = env.tool.get_linear_velocity()
             data["tool_vel"][row, step, 3:] = env.tool.get_angular_velocity()
