@@ -8,7 +8,7 @@ import csv
 import json
 import os
 from pathlib import Path
-import sys
+import time as wallclock
 from typing import Any
 
 
@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--case-name", default="baseline")
+    parser.add_argument("--gel-geometry", choices=['legacy_box','matched_box','source_surface'], default='source_surface')
     parser.add_argument("--youngs-modulus-pa", type=float, default=200_000.0)
     parser.add_argument("--poisson-ratio", type=float, default=0.49)
     parser.add_argument("--mass-damping", type=float, default=5.0)
@@ -89,6 +90,7 @@ def add_wrench(row: dict[str, Any], prefix: str, wrench: Any, append_vector: Any
 
 
 def run(args: argparse.Namespace) -> None:
+    wall_start = wallclock.perf_counter()
     # FP32 is the selected production precision for this experiment.
     os.environ.pop("SUPERDEX_PRECISION", None)
     os.environ["SUPERDEX_ASSETS_PATH"] = str(PROJECT_ROOT / "assets")
@@ -134,6 +136,7 @@ def run(args: argparse.Namespace) -> None:
     np_real = np.float32
 
     material = GelMaterial(
+        geometry=getattr(args, 'gel_geometry', 'source_surface'),
         youngs_modulus_pa=args.youngs_modulus_pa,
         poisson_ratio=args.poisson_ratio,
         mass_damping_s_inv=args.mass_damping,
@@ -336,7 +339,6 @@ def run(args: argparse.Namespace) -> None:
             plug_transform = plug.get_center_of_mass_transform()
             plug_com = np.asarray(plug_transform.translation, dtype=float)
             plug_contacts = list(plug.get_contact_points_world())
-            table_contacts = list(table.get_contact_points_world())
             table_wrench = aggregate_contact_points(
                 plug_contacts, plug.get_handle(), table.get_handle(), plug_com
             )
@@ -395,6 +397,9 @@ def run(args: argparse.Namespace) -> None:
                 inferred_on_plug_force += inferred.force
                 inferred_on_plug_torque += inferred.torque
                 grid = gripper.get_surface_force_field(side)
+                dense_positions, dense_forces = gripper.get_dense_contact_field(side)
+                append_vector(row, f'{side}_dense_on_plug_force_world', -dense_forces.sum(axis=0))
+                append_vector(row, f'{side}_dense_on_plug_torque_world', -np.cross(dense_positions-plug_com,dense_forces).sum(axis=0))
                 current_grids[side] = grid
                 measured_local = world_to_local(housing_transform, measured.force, vectors=True)
                 grid_force_error = max(
@@ -494,6 +499,7 @@ def run(args: argparse.Namespace) -> None:
             gripper.gel_rest_sensor_surface, output, args, material,
             incidence_time, plug_mass, gravity, time_step, np, plt,
         )
+        (output / 'runtime.json').write_text(json.dumps({'wall_s_including_plots_and_rendering': wallclock.perf_counter()-wall_start, 'frames':len(rows)},indent=2)+'\n')
         print(f"wrote {len(rows)} FP32 samples to {output}", flush=True)
     finally:
         if writer is not None:
@@ -555,6 +561,7 @@ def finalize_results(
     metrics.update({
         "precision": "fp32", "sample_rate_hz": int(round(1.0 / time_step)), "incidence_time_s": incidence_time,
         "material": material.__dict__, "case_name": args.case_name,
+        "field_representation": "legacy_surface_nodes" if material.geometry == 'legacy_box' else "7x9_nearest_marker_force_bins; torque approximate, use dense nodal wrench",
     })
     (output / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
     config = {

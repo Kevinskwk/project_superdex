@@ -13,6 +13,22 @@ GRID_X = 7
 GRID_Y = 9
 
 
+class SurfaceGrid(np.ndarray):
+    """Marker-node indices with a separate force bin for every exposed FEM node.
+
+    Forces are cell-integrated contact loads, not optical marker measurements.
+    Nearest-marker aggregation conserves force, but coarse-grid torque is only
+    approximate. Use dense FEM positions/forces for an unbinned wrench.
+    """
+    def __new__(cls, indices, force_node_to_cell):
+        obj = np.asarray(indices, dtype=np.int32).view(cls)
+        obj.force_node_to_cell = force_node_to_cell
+        return obj
+
+    def __array_finalize__(self, obj):
+        self.force_node_to_cell = getattr(obj, 'force_node_to_cell', None)
+
+
 def render_shear_field(
     force_field_sensor: np.ndarray,
     size: tuple[int, int] = (144, 192),
@@ -112,6 +128,8 @@ def dense_surface_force_field(
         int(node_index): (x_index, y_index)
         for (x_index, y_index), node_index in np.ndenumerate(indices)
     }
+    if getattr(surface_grid_indices, 'force_node_to_cell', None) is not None:
+        node_to_cell = surface_grid_indices.force_node_to_cell
     field = np.zeros((GRID_X, GRID_Y, 3), dtype=np.float32)
     for sample in node_contact_forces:
         cell = node_to_cell.get(int(sample.index))
@@ -139,3 +157,32 @@ def surface_displacement(
     current_sensor = world_to_local(housing_transform, positions_world)
     indices = np.asarray(surface_grid_indices, dtype=np.int32)
     return (current_sensor[indices] - rest_sensor).astype(np.float32)
+
+
+def surface_cell_moments(positions_world, forces_world, grid, marker_positions_world,
+                         sensor_transform):
+    """Return intrinsic cell moments [7,9,3] in Nm and an unmapped wrench.
+
+    Uses the SAME node-to-cell assignment as dense_surface_force_field. Each
+    cell moment is sum((node_position-marker_position) x node_force). Adding
+    these couples to marker-position force moments exactly preserves the
+    mapped nodal wrench, including shear couples. Non-surface contact is kept
+    separately, never silently folded into an optical marker observation.
+    The unmapped wrench is in sensor axes about the sensor origin.
+    """
+    positions = np.asarray(positions_world, dtype=float)
+    forces = np.asarray(forces_world, dtype=float)
+    markers = np.asarray(marker_positions_world, dtype=float)
+    mapping = getattr(grid, 'force_node_to_cell', None)
+    if mapping is None:
+        mapping = {int(node): cell for cell, node in np.ndenumerate(np.asarray(grid))}
+    moments = np.zeros((GRID_X, GRID_Y, 3))
+    unmapped = np.ones(len(positions), dtype=bool)
+    for node, cell in mapping.items():
+        moments[cell] += np.cross(positions[node]-markers[cell], forces[node])
+        unmapped[node] = False
+    origin = np.asarray(sensor_transform.translation)
+    remainder = np.r_[forces[unmapped].sum(0),
+                      np.cross(positions[unmapped]-origin, forces[unmapped]).sum(0)]
+    return (world_to_local(sensor_transform, moments.reshape(-1,3), vectors=True).reshape(GRID_X,GRID_Y,3),
+            world_to_local(sensor_transform, remainder.reshape(2,3), vectors=True).ravel())

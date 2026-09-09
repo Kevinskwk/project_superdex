@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import json
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -21,7 +22,8 @@ HAND_SHAPE = (
     / "test/urdf/fr3v2_1_urdf/meshes/robot_ee/franka_hand_white/collision/hand.stl"
 )
 HOUSING_SHAPE = GELSIGHT_ROOT / "generated/housing_collision.mochi.json"
-GEL_SHAPE = GELSIGHT_ROOT / "generated/gel_tet.mochi.json"
+LEGACY_GEL_SHAPE = GELSIGHT_ROOT / "generated/gel_tet.mochi.json"
+GEL_SHAPE = GELSIGHT_ROOT / "generated/gel_source_surface.mochi.json"
 # The HydroShear housings protrude roughly 13 mm from their joint frames. A
 # 15.5 mm half-spacing lets the stock 0--40 mm Franka jaw travel close the gel
 # faces to approximately 8.5 mm while the 16 mm initial joint position leaves
@@ -38,6 +40,7 @@ class GelMaterial:
     mass_damping_s_inv: float = 5.0
     stiffness_damping_s: float = 0.003
     friction_coefficient: float = 1.4
+    geometry: str = "source_surface"
 
 
 @dataclass
@@ -52,12 +55,29 @@ class SoftGripper:
     gel_surface_grid_indices: dict[str, np.ndarray]
     finger_dofs: dict[str, int]
 
+    def get_dense_contact_field(self, side: str) -> tuple[np.ndarray, np.ndarray]:
+        """Current world positions and contact forces for all FEM nodes (N,3).
+
+        Includes shoulder contacts omitted by point-only marker sampling.
+        Register NODE_POSITIONS and NODE_CONTACT_FORCES before stepping. Sum cross(r, f) for the
+        dense nodal wrench; the 7x9 binned field is a separate representation.
+        """
+        gel = self.gels[side]
+        root = self.actor.get_root_transform()
+        rotation = Rotation.from_rotvec(np.asarray(root.rotation.to_rotation_vector()))
+        positions = rotation.apply(np.asarray(gel.get_node_positions_local()).reshape(-1, 3)) + np.asarray(root.translation)
+        forces = np.zeros_like(positions)
+        for sample in gel.get_node_contact_forces_world():
+            forces[int(sample.index)] += np.asarray(sample.force)
+        return positions, forces
+
     def get_surface_force_field(self, side: str) -> np.ndarray:
-        """Read one gel's dense 7x9x3 force field in its sensor frame.
+        """Read one gel's 7x9x3 contact-force bins in its sensor frame.
 
         Register ``physics.QueryType.NODE_CONTACT_FORCES`` on the selected gel
         before stepping the scene. The output axes are sensor X, sensor Y, and
-        the three sensor-frame vector components.
+        the three sensor-frame vector components. Curved gels aggregate exposed
+        FEM loads into nearest-marker cells; this is not optical force inference.
         """
         if side not in self.gels:
             raise KeyError(f"unknown gel side {side!r}; expected 'left' or 'right'")
@@ -68,6 +88,20 @@ class SoftGripper:
             self.gel_surface_grid_indices[side],
             self.links[f"franka_{side}_gelsight_housing"].get_root_transform(),
         )
+
+    def get_surface_cell_moments(self, side: str) -> tuple[np.ndarray, np.ndarray]:
+        """7x9x3 intrinsic moments [Nm], plus the unmapped 6D wrench.
+
+        Both are on the gel in housing/sensor axes. Moments are about CURRENT
+        marker positions; the unmapped wrench is about the housing origin.
+        These are extra FEM diagnostics, not quantities measured by optical
+        markers. See tactile_grid.surface_cell_moments for reconstruction.
+        """
+        from tactile_grid import surface_cell_moments
+        positions, forces = self.get_dense_contact_field(side)
+        grid = self.gel_surface_grid_indices[side]
+        return surface_cell_moments(positions, forces, grid, positions[np.asarray(grid)],
+                                    self.links[f'franka_{side}_gelsight_housing'].get_root_transform())
 
 
 def quaternion_from_rpy(rpy: tuple[float, float, float]) -> Any:
@@ -284,9 +318,24 @@ def build_soft_gripper(
     *,
     name_suffix: str = "",
     world_from_root: Any | None = None,
+    ideal_arm_friction_compensation: bool = False,
+    finger_coupling_stiffness_n_m: float = 0.,
 ) -> SoftGripper:
     """Create and initialize the custom soft-skinned robot."""
     prefab = robotics.load_bot_prefab_from_file(str(FR3_PATH))
+    if ideal_arm_friction_compensation:
+        # FCI externally commanded torques are augmented by motor-friction and
+        # gravity compensation. Arm gravity is already disabled in _copy_link.
+        # Zero residual joint friction models ideal cancellation without an
+        # explicit previous-velocity feedforward lag. NOT measured calibration.
+        import xml.etree.ElementTree as ET
+        urdf = ASSET_ROOT/'test/urdf/fr3v2_1_urdf/robots/fr3v2_1_franka_hand.urdf'
+        limits = {j.attrib['name']:float(j.find('limit').attrib['effort'])
+                  for j in ET.parse(urdf).getroot().findall('joint') if j.find('limit') is not None}
+        for joint in prefab.joints:
+            if joint.name in {f'fr3_joint{i}' for i in range(1,8)}:
+                joint.friction = physics.ArticulatedJointFrictionParams()
+                joint.effort_limit = limits[joint.name.replace('fr3_joint','fr3v2_1_joint')]
     _append_gripper(prefab, name_suffix)
     if world_from_root is not None:
         prefab.world_from_root = world_from_root
@@ -309,9 +358,10 @@ def build_soft_gripper(
         # Soft shapes are authored in articulation-root coordinates. Mochi
         # applies ``world_from_root`` when the skinned actor starts stepping.
         root_from_sensor = rest_transforms[link_index]
-        shape = physics.load_shape_from_file(
-            str(GEL_SHAPE), bake_transform=root_from_sensor
-        )
+        if material.geometry not in ('legacy_box', 'source_surface', 'matched_box'):
+            raise ValueError(f'Unknown gel geometry: {material.geometry}')
+        gel_path = LEGACY_GEL_SHAPE if material.geometry == 'legacy_box' else GELSIGHT_ROOT / 'generated' / f'gel_{material.geometry}.mochi.json'
+        shape = physics.load_shape_from_file(str(gel_path), bake_transform=root_from_sensor)
         gel_shapes.append(shape)
         mesh = physics.get_shape_mesh(shape)
         rest = np.asarray(mesh.coordinates, dtype=float).reshape(-1, 3)
@@ -325,6 +375,18 @@ def build_soft_gripper(
             root_from_sensor.translation, dtype=float
         )
         sensor_rest = sensor_rotation.apply(rest - sensor_translation)
+        if material.geometry != 'legacy_box':
+            from tactile_grid import SurfaceGrid
+            metadata = json.loads(gel_path.with_suffix('.metadata.json').read_text())
+            indices = np.asarray(metadata['marker_indices'], dtype=np.int32)
+            marker_xy = sensor_rest[indices, :2].reshape(-1, 2)
+            exposed = np.asarray(metadata['exposed_nodes'], dtype=np.int32)
+            closest = np.argmin(np.linalg.norm(sensor_rest[exposed, None, :2] - marker_xy[None], axis=2), axis=1)
+            mapping = {int(n): tuple(np.unravel_index(int(c), (7,9))) for n,c in zip(exposed,closest)}
+            gel_surface_grid_indices[side] = SurfaceGrid(indices, mapping)
+            gel_contact_nodes[side] = exposed
+            gel_rest_sensor_surface[side] = sensor_rest[indices]
+            continue
         contact_nodes = np.flatnonzero(
             # FP32 world-space baking at multi-metre tiled offsets introduces
             # sub-micron variation across an otherwise planar gel surface.
@@ -411,6 +473,17 @@ def build_soft_gripper(
             physics.TransformRT(),
             physics.Real3(1.0, 1.0, 1.0),
         )
+    if finger_coupling_stiffness_n_m>0:
+        # The stock Franka URDF has finger_joint2 mimic finger_joint1. A native
+        # bilateral transmission enforces equal opening displacement without
+        # attaching the TOOL or freezing the common opening/closing mode.
+        info=actor.get_articulated_shape_info()
+        indices=[list(info.joint_names).index(f'franka_{side}_finger_joint') for side in ('left','right')]
+        transmission=physics.experimental.add_linear_transmission(actor,
+            physics.experimental.LinearTransmissionParams(joint_indices=indices,joint_coefficients=[1.,-1.]))
+        physics.experimental.attach_displacement_control_actuator(actor,transmission,
+            physics.experimental.DisplacementControlActuatorParams(target_displacement=0.,
+                stiffness=finger_coupling_stiffness_n_m,damping=20.,allow_compressive_force=True))
     return SoftGripper(
         actor=actor,
         prefab=prefab,

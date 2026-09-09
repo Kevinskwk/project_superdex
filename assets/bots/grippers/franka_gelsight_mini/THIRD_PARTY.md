@@ -18,6 +18,12 @@ Panda attachment, finger adapter, and sensor shell in their shared transformed
 sensor frame. The mirrored Franka mounting frames are derived from HydroShear's
 `tacsl_franka_gelsight_mini.urdf` and adapted so both exposed gels face inward.
 
+The default soft geometry is now `generated/gel_source_surface.mochi.json`, a
+coarse source-height-fitted derivative of the same enclosed elastomer, with a
+separate 2 mm projected-pitch marker lattice. `gel_tet.mochi.json` is the legacy
+bounding-box approximation; `gel_matched_box.mochi.json` is its same-topology
+comparison control. These approximations are not exact CAD reproductions.
+
 The Franka hand collision mesh is reused in place from
 `assets/test/urdf/fr3v2_1_urdf`, which contains its own Apache-2.0 license and
 provenance notice.

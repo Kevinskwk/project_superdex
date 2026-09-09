@@ -6,14 +6,13 @@ sensor adapter, housing, and gel geometry comes from HydroShear; each gel is a
 Neo-Hookean tetrahedral actor attached to its rigid sensor housing through
 SuperDex's soft-skinned articulation API.
 
-The default mesh is a `7×9×2` regular tetrahedralization of the exact HydroShear
-gel bounds. Its exposed face provides a dense `7×9×3` force-vector field in the
-authored sensor frame (`sensor_x`, `sensor_y`, `xyz`). Regenerate the assets or
-request the slower high-fidelity Gmsh mesh with:
+The default is now the source-fitted curved gel (297 nodes, 960 tetrahedra),
+with a separate 2 mm-pitch `7×9` marker lattice and `7×9×3` binned force field.
+The original box remains selectable as `legacy_box` for historical comparisons.
+Regenerate the curved and matched-box assets with:
 
 ```bash
-.venv/bin/python assets/bots/grippers/franka_gelsight_mini/generate_assets.py
-.venv/bin/python assets/bots/grippers/franka_gelsight_mini/generate_assets.py --method gmsh
+.venv/bin/python assets/bots/grippers/franka_gelsight_mini/generate_surface_gel.py
 ```
 
 Run one FP32 headless trial with video:
@@ -149,3 +148,33 @@ Re-run the friction/retention sweep with:
 ```bash
 .venv/bin/python experiments/gelsight_mini_contact_validation/run_friction_benchmark.py
 ```
+# Source-shaped gel and 2 mm markers
+
+The historical `legacy_box` gel uses a bounding-box FEM and 3.458 × 3.156 mm
+node spacing, **not** a 2 mm marker layout. A source-height-fitted option now
+preserves the rounded/narrowing HydroShear exposed surface with a separate
+7 × 9 marker lattice (2 mm projected XY pitch, 12 × 16 mm span). Curvature
+makes the maximum straight-line 3D neighbor distance approximately 2.002 mm.
+The large backing remains attached; the smaller exposed side faces the object.
+
+Regenerate without overwriting the legacy assets:
+
+```bash
+.venv/bin/python assets/bots/grippers/franka_gelsight_mini/generate_surface_gel.py
+.venv/bin/python experiments/gelsight_mini_contact_validation/run.py \
+  --gel-geometry source_surface --output /tmp/gelsight-source-check --no-video
+```
+
+`GelMaterial(geometry="source_surface")` selects the new gel programmatically;
+`matched_box` provides a same-topology flat control. New runs default to
+`source_surface`; explicitly select `legacy_box` to reproduce old tests.
+The new mesh is a coarse approximation, not a
+mesh-converged reproduction. See `output/geometry_comparison/REPORT.md`.
+
+The 7 × 9 **force bins** sum exposed FEM contact loads into nearest-marker cells;
+these are not optical marker-derived force estimates. Marker displacement uses
+the actual 2 mm lattice nodes. Binning preserves net force but introduces moment
+error; `SoftGripper.get_dense_contact_field(side)` exposes all FEM node world
+positions and force vectors for unbinned wrench integration. Register both
+`NODE_POSITIONS` and `NODE_CONTACT_FORCES` before stepping. Do not confuse the
+legacy `dense_field_wrench` metrics key with the new unbinned nodal wrench.

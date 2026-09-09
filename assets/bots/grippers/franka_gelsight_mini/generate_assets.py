@@ -219,14 +219,14 @@ def generate_gel_structured(resolution: tuple[int, int, int]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-size", type=float, default=0.002)
-    parser.add_argument("--method", choices=("structured", "gmsh"), default="structured")
+    parser.add_argument("--method", choices=("source_surface", "structured", "gmsh"), default="source_surface")
     parser.add_argument(
         "--resolution",
         nargs=3,
         type=int,
         default=(7, 9, 2),
         metavar=("NX", "NY", "NZ"),
-        help="structured FEM nodes; the default exposes a 7x9 tactile surface",
+        help="structured method only: FEM node resolution (legacy box)",
     )
     args = parser.parse_args()
     if args.target_size <= 0:
@@ -234,7 +234,10 @@ def main() -> None:
     GENERATED.mkdir(parents=True, exist_ok=True)
     fetch_sources()
     generate_housing()
-    if args.method == "gmsh":
+    if args.method == "source_surface":
+        from generate_surface_gel import generate
+        generate()
+    elif args.method == "gmsh":
         generate_gel_gmsh(args.target_size)
     else:
         if min(args.resolution) < 2:
