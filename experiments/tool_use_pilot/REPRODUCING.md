@@ -138,6 +138,12 @@ The curved and matched-flat gel meshes and their metadata also regenerated
 byte-for-byte. New collection snapshots include the asset lock and simulation
 requirements alongside task/controller/gel source.
 
+A fresh checkout using a relocated generated asset cache passed 113 pilot tests
+(two CUDA tests skipped) and 29 asset/gel/collector tests. A 10-step installation
+check loaded the pinned scraper, initialized both `(7,9,3)` force fields and
+rendered EGL RGB from the fresh checkout. It reused the installed wheel runtime;
+it was not a clean dependency installation or a new full episode qualification.
+
 Assets/specs alone do not close the scientific gates: action/observation time
 alignment, current-task counterfactual dispatch, input-oracle exclusion, grouping,
 cross-simulator physics calibration and a small learning/transfer pilot remain

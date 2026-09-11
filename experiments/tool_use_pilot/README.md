@@ -6,7 +6,36 @@ No SCFields downloads or external assets are added by this package.
 
 ## Current entry points
 
-The completed nominal feasibility results are in
+For a new machine, follow [reproduction/setup](REPRODUCING.md): pinned downloadable
+assets, procedural task geometry, recorded passing/negative specs and checksums.
+SCFields meshes and raw outputs remain outside Git.
+
+Start with the [11 September main-server agent handoff](../../SUPERDEX_BENCHMARK_HANDOFF.md)
+for current completed results, commit/asset migration instructions, dataset/action
+semantics and cross-simulator next steps. It supersedes older pending-run checkpoints.
+
+The latest targeted repair package is [rail-free loaded-box pulling and leaned
+wall following](LOADED_BOX_AND_LEAN.md). It separates wrist orientation from a
+level fixture and is being qualified independently of the historical recipes.
+
+Use [revision-21 staged diversification](DIVERSIFICATION.md) for the current
+active roster and gated geometry/physics/observation iterations. Spatula serving
+is deferred. All 19 nominal variants now have baseline passes; bounded geometry/
+pose validation and guide/pushing repairs are tracked in
+[the current progress report](DIVERSIFICATION_PROGRESS.md). Exported or pending
+candidates are not accepted episodes. Earlier recipes below remain historical
+repair protocols.
+
+The current `transfer` recipe uses the [revision-20 mechanics repair](MECHANICS_V20.md):
+one jaw-aligned hook layout, straight-spatula scoop/lift verification, and turning
+with a loaded angular stop. See that report for completed checks and limitations.
+
+For revision-19 thicker tools, friction-only loose-guided hook sleds, keyed
+friction hubs, gravity-loaded levering and tool-mediated pushing, see
+[REAL_TRANSFER.md](REAL_TRANSFER.md). These are new verification candidates;
+the completed revision-18 results below do not automatically qualify them.
+
+The historical revision-18 nominal feasibility results are in
 [BENCHMARK_STATUS.md](BENCHMARK_STATUS.md) and
 [VERIFICATION_20260909.md](VERIFICATION_20260909.md): all 18 retained isolated
 variants have passing full episodes, plus the insert–turn composite. This is

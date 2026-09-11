@@ -1,4 +1,8 @@
-# Benchmark status — 9 September 2026
+# Revision-18 benchmark status — 9 September 2026
+
+This is the completed revision-18 feasibility record. Revision-19 thicker tools
+and real-transfer mechanisms are tracked separately in [REAL_TRANSFER.md](REAL_TRANSFER.md)
+and `output/real_transfer_v19`; they are not automatically covered by these passes.
 
 **All 18 retained isolated variants now have full nominal feasibility passes,
 plus the insert–turn–hold composite. This is not yet a frozen or robustness-qualified benchmark.** The current code

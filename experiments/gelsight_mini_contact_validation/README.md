@@ -98,9 +98,13 @@ campaign:
 .venv/bin/python experiments/gelsight_mini_contact_validation/run_fidelity_campaign.py
 ```
 
-The three capsule meshes default to the sibling TACS-L/IsaacGymEnvs checkout.
-For another location, pass `--capsule-root PATH` or set
-`SCFIELDS_CAPSULE_ROOT`.
+The preparer now uses an immutable 27-tool asset lock and checks source,
+collision and visual hashes. New manifests contain portable relative paths;
+old workstation paths are rebased when loaded. A sibling TacSL/IsaacGym checkout
+is no longer required. Optional `--capsule-root PATH` copies historical capsules
+into a new cache; these are not used by the current benchmark. `--check` verifies
+an existing cache without network access. See the
+[current reproduction guide](../tool_use_pilot/REPRODUCING.md).
 
 The runner detects CPU/SMT topology, reserves 25% of physical cores for the
 desktop, benchmarks several Mochi process/thread layouts, pins each process to

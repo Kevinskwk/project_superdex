@@ -6,7 +6,10 @@ Franka gripper and two compliant GelSight Mini assemblies. Physics uses FP32;
 independent episodes use CPU processes. EGL rendering and the frozen
 Point-M2AE probe use the GPU.
 
-Current status and completion checklist: [BENCHMARK_STATUS.md](BENCHMARK_STATUS.md).
+Revision-18 status and completion checklist: [BENCHMARK_STATUS.md](BENCHMARK_STATUS.md).
+Current revision-20 hook/spatula/turning repair: [MECHANICS_V20.md](MECHANICS_V20.md).
+Historical revision-19 changed/new mechanics:
+[REAL_TRANSFER.md](REAL_TRANSFER.md). The older passes do not qualify new geometry.
 
 ## Current gel and acceptance policy (9 September)
 
@@ -206,6 +209,10 @@ derived from the same corrupted readings. The ideal-sensor head comparison is
 kept separate. Small pilot probe results are exploratory.
 
 ## Run and review
+
+For the revision-19 hardware-oriented additions and verification recipes, see
+[REAL_TRANSFER.md](REAL_TRANSFER.md). Older results below remain historical
+evidence for their saved revisions, not qualification of the new geometry.
 
 The reviewed gallery is [output/benchmark_representatives](output/benchmark_representatives/README.md):
 18 isolated variants and one insert–turn composite. To package the same captured
