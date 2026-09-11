@@ -41,11 +41,35 @@ def offset_profile(points, clearance):
 
 def friction_provenance(spec, implementation):
     """Recover actual coefficients, including the retained pilot helper bug."""
+    if (
+        spec.get("variant") == "spatula_lift"
+        and spec.get("spatula_contact_friction") is not None
+    ):
+        mu = spec["spatula_contact_friction"]
+        grip = spec["gel_friction"]
+        support = spec.get("support_friction", 0.4)
+        return dict(
+            tool_actor_coefficient=mu,
+            environment_actor_coefficient=mu,
+            gel_actor_coefficient=grip**2 / mu,
+            surface_actor_coefficient=support**2 / mu,
+            effective_gel_tool_friction=grip,
+            effective_environment_tool_friction=mu,
+            effective_tool_surface_friction=support,
+            effective_object_surface_friction=support,
+            legacy_tool_friction_override=False,
+            independent_friction_sweep_valid=True,
+            note="Heterogeneous spatula interfaces: scalar environment target is pancake; factors enforce geometric-mean pair coefficients, not measured standalone material values.",
+        )
     environment = (
         spec["friction"] ** 2 / spec["gel_friction"]
         if spec.get("effective_friction")
         else spec["friction"]
     )
+    if spec["family"] in ("levering", "pushing") or (
+        spec["family"] == "hook" and spec.get("load_mode") == "friction"
+    ):
+        environment = spec.get("support_friction", 0.4)
     peg_header = implementation.split("class PegWorld", 1)[-1].split(
         "def make_tool_mesh", 1
     )[0]
@@ -225,22 +249,40 @@ def solid_rings(rings, cap=True):
     return mesh
 
 
-def peg_mesh(shape="key", scale=1.0, edge=0.008):
+def peg_mesh(
+    shape="key",
+    scale=1.0,
+    edge=0.008,
+    *,
+    shaft_diameter=0.005,
+    handle_size=(0.018, 0.024),
+    tip_length=0.008,
+):
     p = profile(shape, scale)
     angles = np.arange(len(p)) * 2 * np.pi / len(p)
     u = np.c_[np.cos(angles), np.sin(angles)]
-    handle = u / np.maximum(abs(u[:, :1]) / 0.009, abs(u[:, 1:]) / 0.012)
-    shaft = u * 0.0025
+    handle = u / np.maximum(
+        abs(u[:, :1]) / (handle_size[0] / 2), abs(u[:, 1:]) / (handle_size[1] / 2)
+    )
+    shaft = u * shaft_diameter / 2
     rings = [(z, handle) for z in np.linspace(0.025, -0.025, 8)]
-    rings += [(z, shaft) for z in np.linspace(-0.025, -0.060, 8)]
-    rings += [(-0.061, p), (-0.068, p), (-0.069, p * 0.9)]
+    top = -0.069 + tip_length
+    rings += [(z, shaft) for z in np.linspace(-0.025, top + 0.001, 8)]
+    # Long tips need axial rings, not additional GLOBAL subdivision of the
+    # handle/neck. Preserve the exact legacy rings for old manifests.
+    zs = (
+        [top, -0.068]
+        if tip_length <= 0.008
+        else np.linspace(top, -0.068, max(2, int(np.ceil((top + 0.068) / 0.006)) + 1))
+    )
+    rings += [(z, p) for z in zs] + [(-0.069, p * 0.9)]
     mesh = solid_rings(rings)
     while mesh.edges_unique_length.max() > edge:
         mesh = mesh.subdivide()
     return mesh
 
 
-def socket_mesh(shape="key", scale=1, clearance=0.0006, chamfer=0.003):
+def socket_mesh(shape="key", scale=1, clearance=0.0006, chamfer=0.003, shaft=False):
     """One closed solid with an open, blind profile-matched pocket."""
     p = offset_profile(profile(shape, scale), clearance)
     mouth = offset_profile(p, 0.002)
@@ -249,6 +291,8 @@ def socket_mesh(shape="key", scale=1, clearance=0.0006, chamfer=0.003):
     outer = 0.022 * u / np.maximum(abs(u[:, :1]), abs(u[:, 1:]))
     # Follow the solid boundary: exterior bottom -> exterior top -> cavity -> floor.
     rings = [(-0.019, outer), (0.0, outer), (0.0, mouth), (-chamfer, p), (-0.016, p)]
+    if shaft:
+        rings = [(-0.032, 0.006 * u), (-0.019, 0.006 * u)] + rings
     mesh = solid_rings(rings)
     mesh.fix_normals()
     if mesh.volume < 0:

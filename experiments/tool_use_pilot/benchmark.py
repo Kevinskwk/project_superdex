@@ -1,6 +1,6 @@
 """Bounded contact-rich benchmark pilot; legacy experiments remain unchanged.
 
-Run --phase repair first, then canonical, diversity, branches and composite.
+Run --phase screen first, then canonical, diversity, branches and composite.
 Every attempted trajectory consumes the persistent 256-trajectory budget.
 """
 
@@ -62,7 +62,7 @@ class BenchmarkSpec(DecisionSpec):
     stage: str = "insertion"
     profile_shape: str = "key"
     block: str = "canonical"
-    revision: int = 18
+    revision: int = 19
     gel_geometry: str | None = None
     scale: float = 1.0
     bar_scale: float = 1.0
@@ -75,9 +75,22 @@ class BenchmarkSpec(DecisionSpec):
     fixture_pitch_deg: float = 0.0
     robot_roll_deg: float = 0.0
     robot_pitch_deg: float = 0.0
+    level_task_frame: bool = False
+    robot_pose_in_task_frame: bool = False
+    surface_lean_deg: float = 0.0
     grasp_depth_m: float | None = None
     speed_scale: float = 0.75
     turn_command_deg: float = 100.0
+    rotor_stop_deg: float | None = None
+    rotor_stop_stiffness: float = 2.0
+    rotor_stop_damping: float = 0.02
+    hook_heading_deg: float = 0.0
+    hook_working_drop_m: float = 0.0
+    spatula_edge_entry: bool = False
+    spatula_handle_height_m: float = 0.012
+    spatula_grasp_x_m: float = 0.0
+    spatula_entry_lift_m: float = 0.010
+    spatula_contact_friction: float | None = None
     load_mode: str = "spring"
     friction_torque_nm: float = 0.015
     detent_torque_nm: float = 0.015
@@ -123,9 +136,100 @@ class BenchmarkSpec(DecisionSpec):
     surface_lateral_samples: int | None = None
     surface_working_tip_tracking: bool | None = None
     rotor_friction_model: str | None = None
+    rotor_bearing_contact: bool = True
     surface_sdf_voxel_m: float = 0.0005
+    handle_width_m: float = 0.018
+    handle_depth_m: float = 0.024
+    shaft_diameter_m: float | None = None
+    tip_length_m: float | None = None
+    tip_scale: float | None = None
+    follower_diameter_m: float | None = None
+    sled_mass_kg: float = 0.2
+    box_loop_height_m: float | None = None
+    support_friction: float = 0.4
+    rail_clearance_m: float = 0.002
+    flap_mass_kg: float = 0.1
+    flap_hinge_friction_nm: float = 0.001
+    object_mass_kg: float = 0.15
+    push_distance_m: float = 0.04
+    push_yaw_deg: float = 15.0
+    push_heading_deg: float = 0.0
+    push_contact_y_m: float | None = None
+    push_end_lateral_m: float = 0.0
+    push_overtravel_m: float = 0.005
+    pusher_bottom_m: float = -0.055
+    lever_tip_x_m: float = 0.14
+    lever_angle_deg: float = 50.0
+    lever_base_front_m: float = 0.05
+    transfer_support_collider: str = "mesh"
+    working_width_scale: float = 1.0
+    diversification_stage: str = ""
+    diversification_condition: str = ""
+    parent_config_id: str = ""
+    geometry_id: str = ""
+    physics_id: str = ""
+    split_group: str = ""
+    intended_outcome: str = "unspecified"
 
     def __post_init__(self):
+        if self.robot_pose_in_task_frame and not self.level_task_frame:
+            raise ValueError(
+                "Task-frame wrist rotation requires an independent level fixture"
+            )
+        if self.box_loop_height_m is not None and (
+            not np.isfinite(self.box_loop_height_m)
+            or not 0.03 <= self.box_loop_height_m <= 0.08
+        ):
+            raise ValueError("Loaded-box loop height outside 30–80 mm")
+        if self.level_task_frame and not (
+            (
+                self.family == "surface"
+                and ("wall" in self.variant or "slot" in self.variant)
+            )
+            or (self.family == "hook" and self.variant == "loaded_box")
+        ):
+            raise ValueError(
+                "Independent level fixtures are qualified separately for surface/loaded-box tasks"
+            )
+        if not np.isfinite(self.surface_lean_deg) or abs(self.surface_lean_deg) > 25:
+            raise ValueError("surface lean outside +/-25 degrees")
+        if self.surface_lean_deg and not (
+            self.level_task_frame and self.family == "surface"
+        ):
+            raise ValueError("Surface lean requires an independent level task frame")
+        if self.variant == "loaded_box" and not (
+            self.level_task_frame and self.load_mode == "friction"
+        ):
+            raise ValueError("Loaded box requires a level, free frictional support")
+        if not np.isfinite(self.working_width_scale) or not 0.8 <= self.working_width_scale <= 1.2:
+            raise ValueError("working width scale outside [0.8, 1.2]")
+        for name, value in dict(
+            shaft_diameter_m=0.010 if self.revision >= 19 else 0.005,
+            tip_length_m=0.022 if self.revision >= 19 else 0.008,
+            tip_scale=2.0 if self.revision >= 19 else 1.0,
+            follower_diameter_m=0.010 if self.revision >= 19 else 0.005,
+        ).items():
+            if getattr(self, name) is None:
+                object.__setattr__(self, name, value)
+        if any(
+            not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0
+            for name in (
+                "handle_width_m",
+                "handle_depth_m",
+                "shaft_diameter_m",
+                "tip_length_m",
+                "tip_scale",
+                "follower_diameter_m",
+                "sled_mass_kg",
+                "support_friction",
+                "rail_clearance_m",
+                "flap_mass_kg",
+                "object_mass_kg",
+            )
+        ):
+            raise ValueError(
+                "positive finite transfer geometry/material dimensions required"
+            )
         modern = self.revision >= 15
         repaired = self.revision >= 18
         if self.rotor_friction_model is None:
@@ -311,8 +415,44 @@ class BenchmarkSpec(DecisionSpec):
             raise ValueError("unknown gel geometry")
         if self.surface_tip_compensation is None:
             object.__setattr__(self, "surface_tip_compensation", self.revision >= 11)
-        if self.family not in ("surface", "hook", "insertion", "turning", "composite"):
+        if self.family not in (
+            "surface",
+            "hook",
+            "insertion",
+            "turning",
+            "composite",
+            "levering",
+            "pushing",
+        ):
             raise ValueError(self.family)
+        if self.family == "levering" and self.variant not in (
+            "gravity_flap",
+            "spatula_lift",
+        ):
+            raise ValueError("unknown levering variant")
+        if self.rotor_stop_deg is not None and not 0 < self.rotor_stop_deg <= 180:
+            raise ValueError("rotor stop must be in (0, 180] degrees")
+        if (
+            self.spatula_contact_friction is not None
+            and not 0.05 <= self.spatula_contact_friction <= 1.0
+        ):
+            raise ValueError("spatula contact friction must be in [0.05, 1]")
+        if not (
+            np.isfinite(self.rotor_stop_stiffness)
+            and 0 < self.rotor_stop_stiffness <= 50
+            and np.isfinite(self.rotor_stop_damping)
+            and 0 <= self.rotor_stop_damping <= 5
+        ):
+            raise ValueError(
+                "positive finite stop stiffness and nonnegative damping required"
+            )
+        if (
+            not np.isfinite(self.hook_working_drop_m)
+            or not 0 <= self.hook_working_drop_m <= 0.04
+        ):
+            raise ValueError("hook working drop must be within [0, 40] mm")
+        if self.family == "pushing" and self.variant not in ("translation", "pose"):
+            raise ValueError("pushing variant must be translation or pose")
         object.__setattr__(
             self,
             "kind",
@@ -326,8 +466,10 @@ class BenchmarkSpec(DecisionSpec):
         object.__setattr__(self, "stage", stage)
         duration = self.duration
         super().__post_init__()
-        if self.family == "surface":
+        if self.family in ("surface", "levering", "pushing"):
             object.__setattr__(self, "task", "calibration")
+        if self.family in ("levering", "pushing"):
+            object.__setattr__(self, "stage", self.family)
         if not 0 < self.speed_scale <= 1.25:
             raise ValueError("speed multiplier outside screened bounds")
         if not 0 < self.grip_force_n <= 35:
@@ -370,19 +512,60 @@ class BenchmarkSpec(DecisionSpec):
             *RETIRED_SURFACES,
         ):
             raise ValueError(self.variant)
-        if self.load_mode not in ("spring", "friction", "detent"):
+        if self.load_mode not in ("spring", "friction", "detent", "gravity"):
             raise ValueError(self.load_mode)
+        if self.load_mode == "gravity" and self.family != "levering":
+            raise ValueError("gravity load mode is for levering")
+        if (
+            not np.isfinite(self.flap_hinge_friction_nm)
+            or self.flap_hinge_friction_nm < 0
+        ):
+            raise ValueError("nonnegative finite hinge friction required")
         if self.rotor_friction_model not in ("external", "joint"):
             raise ValueError("rotor friction model must be external or joint")
-        end = dict(surface=18, hook=35, insertion=20, turning=30, composite=48)[
-            self.family
-        ]
+        if self.transfer_support_collider not in ("mesh", "analytic_box"):
+            raise ValueError("unknown transfer support collider")
+        for name, lo, hi in (
+            ("push_distance_m", 0.005, 0.08),
+            ("push_end_lateral_m", -0.015, 0.015),
+            ("push_overtravel_m", 0.0, 0.015),
+            ("pusher_bottom_m", -0.08, -0.04),
+            ("lever_tip_x_m", 0.12, 0.20),
+            ("lever_angle_deg", 1.0, 60.0),
+            ("lever_base_front_m", 0.03, 0.10),
+        ):
+            if (
+                not np.isfinite(getattr(self, name))
+                or not lo <= getattr(self, name) <= hi
+            ):
+                raise ValueError(f"{name} outside bounded transfer range")
+        if self.push_contact_y_m is not None and (
+            not np.isfinite(self.push_contact_y_m) or abs(self.push_contact_y_m) > 0.04
+        ):
+            raise ValueError("push contact offset outside +/-40 mm")
+        if (
+            not np.isfinite(self.push_heading_deg)
+            or not np.isfinite(self.push_yaw_deg)
+            or abs(self.push_yaw_deg) > 45
+        ):
+            raise ValueError("finite heading and bounded pushing yaw required")
+        end = dict(
+            surface=18,
+            hook=35,
+            insertion=20,
+            turning=30,
+            composite=48,
+            levering=20,
+            pushing=24,
+        )[self.family]
         if self.family == "composite" and self.seat_alignment_search:
             end = 72
         if self.family == "turning" and self.turning_return_overtravel_deg:
             end = 36
         if self.family == "turning" and not self.return_after_turn:
             end = 20
+        if self.family == "hook" and self.load_mode == "friction":
+            end = 30 if self.branch in ("left", "right") else 24
         if self.family == "composite" and not self.return_after_turn:
             end = 56 if self.seat_alignment_search else 32
         if self.family == "surface" and self.guide_acquisition_gate:
@@ -406,7 +589,8 @@ class BenchmarkMixin:
     def prepare_robot(self):
         """Rotate the actual wrist before building a prepared tool grasp."""
         s = self.spec
-        if not (s.robot_roll_deg or s.robot_pitch_deg):
+        self.prepared_wrist_delta = Rotation.identity()
+        if not (s.robot_roll_deg or s.robot_pitch_deg or s.surface_lean_deg):
             return
         p, r = self.p, self.r
         observation = self.osc.get_current_observations_from_mochi()
@@ -415,6 +599,29 @@ class BenchmarkMixin:
         rotvec = Rotation.from_euler(
             "xy", [s.robot_roll_deg, s.robot_pitch_deg], degrees=True
         ).as_rotvec()
+        if s.surface_lean_deg or s.robot_pose_in_task_frame:
+            from fidelity_campaign import transform_points
+
+            root = observation.world_from_root
+            centers = [
+                transform_points(root, self.gripper.gel_rest_root[side]).mean(0)
+                for side in ("left", "right")
+            ]
+            y = centers[0] - centers[1]
+            y /= np.linalg.norm(y)
+            x = np.cross(y, [0, 0, 1])
+            x /= np.linalg.norm(x)
+            frame = Rotation.from_matrix(np.column_stack([x, y, [0, 0, 1]]))
+            if s.robot_pose_in_task_frame:
+                rotvec = frame.apply(rotvec)
+            axis = (
+                frame * Rotation.from_euler("z", s.surface_heading_deg, degrees=True)
+            ).apply([1, 0, 0])
+            rotvec = (
+                Rotation.from_rotvec(axis * np.deg2rad(s.surface_lean_deg))
+                * Rotation.from_rotvec(rotvec)
+            ).as_rotvec()
+        self.prepared_wrist_delta = Rotation.from_rotvec(rotvec)
         desired = Rotation.from_rotvec(rotvec) * start
         correction = np.zeros(3)
         dofs = np.arange(self.gripper.actor.get_num_dofs(), dtype=np.int32)
@@ -462,7 +669,12 @@ class BenchmarkMixin:
             )
 
     def prepared_frame(self, centers, default_rot, default_origin):
-        if not (self.spec.robot_roll_deg or self.spec.robot_pitch_deg):
+        if not (
+            self.spec.robot_roll_deg
+            or self.spec.robot_pitch_deg
+            or self.spec.surface_lean_deg
+        ):
+            self.grasp_rot = default_rot
             return default_rot, default_origin + default_rot.apply(
                 [0, 0, self.spec.grasp_depth_m]
             )
@@ -477,17 +689,17 @@ class BenchmarkMixin:
             centers.append(transform_points(housing, rest).mean(0))
         y = centers[0] - centers[1]
         y /= np.linalg.norm(y)
-        z = Rotation.from_euler(
-            "xy", [self.spec.robot_roll_deg, self.spec.robot_pitch_deg], degrees=True
-        ).apply([0, 0, 1])
+        z = self.prepared_wrist_delta.apply([0, 0, 1])
         x = np.cross(y, z)
         x /= np.linalg.norm(x)
         z = np.cross(x, y)
         rot = Rotation.from_matrix(np.column_stack([x, y, z]))
+        self.grasp_rot = rot
         offset = -0.009 if self.spec.task == "hook" else -0.018
-        return rot, np.mean(centers, axis=0) + rot.apply(
+        origin = np.mean(centers, axis=0) + rot.apply(
             [0, 0, offset + self.spec.grasp_depth_m]
         )
+        return (default_rot if self.spec.level_task_frame else rot), origin
 
     def clock(self, t):
         return t if t < 4 else 4 + (t - 4) * self.spec.speed_scale
@@ -523,6 +735,8 @@ class BenchmarkMixin:
             "surface_wait_s",
             "guide_acquired",
             "guide_acquisition_dwell",
+            "vertical_relief_m",
+            "last_vertical_force_n",
         ):
             if hasattr(self, name):
                 control[name] = getattr(self, name)
@@ -565,7 +779,14 @@ class PegWorld(BenchmarkMixin, KeyStageWorld):
     def make_tool_mesh(self):
         if self.spec.profile_shape == "legacy":
             return super().make_tool_mesh()
-        return peg_mesh(self.spec.profile_shape, self.spec.scale)
+        s = self.spec
+        return peg_mesh(
+            s.profile_shape,
+            s.scale * s.tip_scale,
+            shaft_diameter=s.shaft_diameter_m,
+            handle_size=(s.handle_width_m, s.handle_depth_m),
+            tip_length=s.tip_length_m,
+        )
 
     def build_environment(self):
         if self.spec.profile_shape == "legacy":
@@ -578,8 +799,22 @@ class PegWorld(BenchmarkMixin, KeyStageWorld):
         self.socket_rot = self.rot * Rotation.from_euler(
             "xyz", [s.fixture_roll_deg, s.fixture_pitch_deg, s.yaw_deg], degrees=True
         )
-        pocket = socket_mesh(s.profile_shape, s.scale, s.clearance_m, s.chamfer_m)
+        pocket = socket_mesh(
+            s.profile_shape,
+            s.scale * s.tip_scale,
+            s.clearance_m,
+            s.chamfer_m,
+            shaft=s.revision >= 19 and s.family in ("turning", "composite"),
+        )
         base = trimesh.creation.box([0.060, 0.060, 0.006])
+        if s.revision >= 19 and s.family in ("turning", "composite"):
+            bearing = trimesh.creation.annulus(
+                r_min=0.0063, r_max=0.012, height=0.014, sections=48
+            )
+            bearing.apply_translation([0, 0, -0.001])
+            foot = trimesh.creation.box([0.080, 0.070, 0.008])
+            foot.apply_translation([0, 0, -0.012])
+            base = trimesh.util.concatenate([bearing, foot])
 
         def shape(mesh):
             return p.create_tri_mesh_shape(
@@ -610,6 +845,11 @@ class PegWorld(BenchmarkMixin, KeyStageWorld):
                 resistance.coulomb = s.friction_torque_nm
                 resistance.falloff_vel = 0.02
             params.joints[1].friction = resistance
+        if s.rotor_stop_deg is not None and s.family in ("turning", "composite"):
+            params.joints[1].min_limit = [0, 0, 0]
+            params.joints[1].max_limit = [0, 0, np.deg2rad(s.rotor_stop_deg)]
+            params.joints[1].limit_stiffness = s.rotor_stop_stiffness
+            params.joints[1].limit_damping = s.rotor_stop_damping
         params.links = [
             p.ArticulatedLinkParams(
                 name="base",
@@ -632,6 +872,13 @@ class PegWorld(BenchmarkMixin, KeyStageWorld):
         self.base, self.rotor = [
             self.scene.get_actor(h) for h in self.fixture.get_nested_link_actors()
         ]
+        if not s.rotor_bearing_contact:
+            self.scene.enable_actor_contact_symmetric(
+                self.base.get_handle(),
+                self.rotor.get_handle(),
+                False,
+                p.IncludeNestedActors.NO,
+            )
         self.env = [self.rotor, self.base]
         self.environment_meshes = [pocket, base]
         self.slider = None
@@ -871,7 +1118,7 @@ class PegWorld(BenchmarkMixin, KeyStageWorld):
         )
         contained = bool(
             contains_profile(
-                profile(self.spec.profile_shape, self.spec.scale),
+                profile(self.spec.profile_shape, self.spec.scale * self.spec.tip_scale),
                 vertices[:, :2],
                 self.spec.clearance_m + 0.0001,
             ).all()
@@ -930,12 +1177,22 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
         s = self.spec
         self.asset_record = None
         if "wall" in s.variant or "slot" in s.variant or "concave" in s.variant:
-            mesh = peg_mesh("pen")
-            mesh.apply_transform(
-                trimesh.transformations.rotation_matrix(
-                    np.deg2rad(-s.surface_heading_deg), [0, 0, 1]
-                )
+            mesh = peg_mesh(
+                "pen",
+                s.follower_diameter_m / 0.005,
+                shaft_diameter=s.shaft_diameter_m,
+                handle_size=(s.handle_width_m, s.handle_depth_m),
+                tip_length=0.008,
             )
+            bottom = np.isclose(mesh.vertices[:, 2], mesh.bounds[0, 2])
+            rotation = (
+                self.rot.inv() * self.grasp_rot
+                if s.level_task_frame
+                else Rotation.from_euler("z", -s.surface_heading_deg, degrees=True)
+            )
+            mesh.vertices = rotation.apply(mesh.vertices)
+            if s.level_task_frame:
+                self.working_tip_points = mesh.vertices[bottom].copy()
             return mesh
         family = (
             "peeler"
@@ -952,6 +1209,14 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
         mesh = trimesh.load(
             self.asset_record["canonical_path"], force="mesh", process=False
         )
+        # Authored asset frame: smoothly deform the grasp only above the working
+        # section. Connectivity and the blade/holder relation remain unchanged.
+        blend = np.clip((mesh.vertices[:, 2] + 0.030) / 0.020, 0, 1)
+        mesh.vertices[:, 0] *= (
+            blend * (s.handle_width_m / 0.018)
+            + (1 - blend) * s.working_width_scale
+        )
+        mesh.vertices[:, 1] *= 1 + blend * (s.handle_depth_m / 0.024 - 1)
         # Change the STROKE direction, not the established physical grasp.
         # prepared_frame rotates task axes; counter-rotate the authored tool so
         # its broad blade/handle never gets turned sideways into the gel pads.
@@ -978,7 +1243,7 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
         s = self.spec
         from benchmark_geometry import peeler_working_edge, peeling_cylinder
 
-        self.working_end = (
+        self.working_end = self.working_tip_points.mean(0) if hasattr(self, "working_tip_points") else (
             peeler_working_edge(self.mesh)
             if s.variant == "cylindrical_peel"
             else self.mesh.vertices[
@@ -988,6 +1253,14 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
         self.surface_origin = self.origin + self.rot.apply(
             [s.fixture_x_m, s.fixture_y_m, self.working_end[2] - 0.004]
         )
+        if s.level_task_frame:
+            self.surface_origin = self.origin + self.rot.apply(
+                [
+                    self.working_end[0] + s.fixture_x_m,
+                    self.working_end[1] + s.fixture_y_m,
+                    self.working_tip_points[:, 2].min() - 0.004,
+                ]
+            )
         self.surface_rot = self.rot * Rotation.from_euler(
             "xyz", [s.fixture_roll_deg, s.fixture_pitch_deg, s.yaw_deg], degrees=True
         )
@@ -1010,9 +1283,10 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
             self.environment_meshes = [peeling_cylinder(s.peeler_radius_m)]
         if "wall" in s.variant or "slot" in s.variant:
             curved = "curved" in s.variant or "rounded" in s.variant
-            self.environment_meshes += [guide_wall(curved, 1)]
+            half_width = s.follower_diameter_m / 2 + 0.001
+            self.environment_meshes += [guide_wall(curved, 1, half_width)]
             if "slot" in s.variant:
-                self.environment_meshes += [guide_wall(curved, -1)]
+                self.environment_meshes += [guide_wall(curved, -1, half_width)]
         self.env = []
         for i, mesh in enumerate(self.environment_meshes):
             analytic = s.surface_contact_model == "analytic_box" and (
@@ -1101,8 +1375,21 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
         )
         x = length * progress
         curved = "curved" in s.variant or "rounded" in s.variant
+        guided = "wall" in s.variant or "slot" in s.variant
+        tip_tracking = guided and s.tool_pose_feedback and s.revision >= 21
+        measured_tip = None
+        curve_x = x
+        if tip_tracking:
+            # Privileged collector tracking, not a model input or a claim of
+            # hardware sensing: actual contact-tip position includes gel-induced
+            # tool rotation that wrist/root position alone misses.
+            root = self.tool.get_root_transform()
+            measured_tip = Rotation.from_rotvec(
+                np.asarray(root.rotation.to_rotation_vector())
+            ).apply(self.working_end) + np.asarray(root.translation)
+            curve_x = self.surface_rot.inv().apply(measured_tip - self.surface_origin)[0]
         y = (
-            0.004 * (1 - np.cos(np.pi * x / 0.04))
+            0.004 * (1 - np.cos(np.pi * curve_x / 0.04))
             if curved
             else 0.002 * np.sin(2 * np.pi * progress)
             if "draw" in s.variant
@@ -1200,10 +1487,17 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
         )
         if t >= 1.5 and s.tool_pose_feedback:
             # Tangential tool tracking; normal motion is controlled by load only.
+            if tip_tracking:
+                actual = self.rot.inv().apply(measured_tip - self.origin) - self.working_end
             increment = np.clip(4 * (value - actual), -0.002, 0.002)
             increment[2] = 0
+            if tip_tracking:
+                # Side and floor forces remain controlled by admittance. Do not
+                # add a lateral pose servo that fights the guide preload.
+                increment[1] = 0
+            bound = 0.008 if tip_tracking else 0.012
             self.tracking_correction = np.clip(
-                self.tracking_correction + s.dt * increment, -0.012, 0.012
+                self.tracking_correction + s.dt * increment, -bound, bound
             )
             value += self.tracking_correction
         offset = self.rot.inv().apply(self.origin - self.ee0)
@@ -1306,7 +1600,7 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
             # count as contact events and remain in the full extrinsic wrench.
             x = float(
                 self.surface_rot.inv().apply(
-                    np.asarray(root.translation) - self.surface_origin
+                    (tip_world if self.spec.level_task_frame else np.asarray(root.translation)) - self.surface_origin
                 )[0]
             )
             slope = (
@@ -1347,7 +1641,7 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
             # Under force control the equilibrium target is deliberately beyond
             # the wall. Measure the working edge's wall gap, not that commanded
             # spring deflection. Guide contact is still independently required.
-            tip_points = self.mesh.vertices[
+            tip_points = self.working_tip_points if hasattr(self, "working_tip_points") else self.mesh.vertices[
                 self.mesh.vertices[:, 2] <= self.mesh.bounds[0, 2] + 1e-6
             ]
             tip_world = Rotation.from_rotvec(
@@ -1359,7 +1653,16 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
                 if ("curved" in self.spec.variant or "rounded" in self.spec.variant)
                 else np.zeros(len(points))
             )
-            lateral_error = float(abs(np.min(guide_y + 0.0035 - points[:, 1])))
+            lateral_error = float(
+                abs(
+                    np.min(
+                        guide_y
+                        + self.spec.follower_diameter_m / 2
+                        + 0.001
+                        - points[:, 1]
+                    )
+                )
+            )
         row.update(
             surface_normal_force_n=self.last_normal_force,
             path_lateral_error_m=lateral_error,
@@ -1383,6 +1686,16 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
 
 
 def make_world(spec):
+    if spec.family == "hook" and spec.variant == "loaded_box":
+        from loaded_box import LoadedBoxWorld
+
+        return LoadedBoxWorld(spec)
+    if spec.family in ("levering", "pushing") or (
+        spec.family == "hook" and spec.load_mode == "friction"
+    ):
+        from transfer_world import TransferWorld
+
+        return TransferWorld(spec)
     return (
         SurfaceWorld
         if spec.family == "surface"
@@ -1394,6 +1707,18 @@ def make_world(spec):
 
 def audit(data, spec, abort):
     result = metrics(data, spec)
+    if spec.family in ("levering", "pushing") or (
+        spec.family == "hook" and spec.load_mode == "friction"
+    ):
+        from transfer_world import transfer_audit
+
+        result.update(transfer_audit(data, spec, result))
+        if spec.variant == "loaded_box":
+            from loaded_box import loaded_box_metrics
+
+            result.update(loaded_box_metrics(data, spec))
+        if spec.family == "levering":
+            result.pop("max_progress_mm", None)
     active = ~data["initialization"]
     result["physical_valid"] &= abort is None
     if spec.family in ("insertion", "turning", "composite"):
@@ -1548,9 +1873,12 @@ def worker(payload, output, render=False):
                 task_variant=spec.variant,
                 task_stage=spec.stage,
                 task_kind=spec.family,
-                task_progress_units="rad" if spec.family == "turning" else "m",
+                task_progress_units="rad"
+                if spec.family in ("turning", "composite")
+                or (spec.family == "levering" and spec.variant != "spatula_lift")
+                else "m",
                 collector_pose_feedback=spec.tool_pose_feedback,
-                collector_force_feedback=spec.family == "surface",
+                collector_force_feedback=spec.family == "surface" or spec.variant == "loaded_box",
                 randomization_json=json.dumps(
                     {
                         k: getattr(spec, k)
@@ -1577,6 +1905,8 @@ def worker(payload, output, render=False):
             f.attrs["gel_geometry"] = spec.gel_geometry
             if spec.family == "surface":
                 f.attrs["working_end_tool_m"] = world.working_end
+                if spec.revision >= 21 and spec.tool_pose_feedback and ("wall" in spec.variant or "slot" in spec.variant):
+                    f.attrs["collector_tip_tracking"] = "Oracle rigid tool pose + known tip; 2 mm/s, +/-8 mm tangential integral correction; measured-tip curve abscissa; not model input"
             from benchmark_geometry import gel_benchmark_role
 
             f.attrs["gel_role"] = gel_benchmark_role(spec.gel_geometry)
@@ -1657,8 +1987,34 @@ def worker(payload, output, render=False):
                     abs(world.rot.apply([1, 0, 0]) @ jaw)
                 )
             f.attrs["effective_gel_tool_friction"] = spec.gel_friction
+            if (
+                spec.variant == "spatula_lift"
+                and spec.spatula_contact_friction is not None
+            ):
+                from transfer_world import spatula_material_factors
+
+                f.attrs["spatula_interface_friction_json"] = json.dumps(
+                    dict(
+                        gel_tool=spec.gel_friction,
+                        tool_pancake=spec.spatula_contact_friction,
+                        tool_surface=spec.support_friction,
+                        pancake_surface=spec.support_friction,
+                        actor_factors=spatula_material_factors(
+                            spec.gel_friction,
+                            spec.spatula_contact_friction,
+                            spec.support_friction,
+                        ),
+                        note="Pair targets; engine actor factors are not standalone measured material friction. Incidental gel/environment contact is not part of this task.",
+                    )
+                )
             f.attrs["effective_environment_tool_friction"] = (
-                spec.friction
+                spec.spatula_contact_friction
+                if spec.variant == "spatula_lift"
+                and spec.spatula_contact_friction is not None
+                else float(np.sqrt(spec.gel_friction * spec.support_friction))
+                if spec.family in ("levering", "pushing")
+                or (spec.family == "hook" and spec.load_mode == "friction")
+                else spec.friction
                 if spec.effective_friction
                 else float(np.sqrt(spec.gel_friction * spec.friction))
             )
@@ -1677,6 +2033,58 @@ def worker(payload, output, render=False):
             f.attrs["oracle_channels"] += (
                 ",oblique_contact_normal_load_fraction,per_contact_coulomb_excess_n"
             )
+            if spec.level_task_frame:
+                f.attrs["fixture_frame_semantics"] = "Level task axes independent of prepared wrist tilt; tool mesh contains the fixed grasp orientation."
+                f.attrs["prepared_grasp_rotation_world"] = world.grasp_rot.as_matrix().ravel()
+                f.attrs["mesh_from_authored_tool_rotation"] = (
+                    world.rot.inv() * world.grasp_rot
+                ).as_matrix().ravel()
+                f.attrs["wrist_perturbation_axes"] = "initial horizontal grasp/task axes" if spec.robot_pose_in_task_frame else "world axes; surface_lean is about task X"
+            if spec.variant == "loaded_box":
+                f.attrs["oracle_channels"] += ",collector_vertical_relief_m,tool_contact_force_task_n,box_contact_force_world_n"
+                f.attrs["oracle_channels"] += ",collector_pull_tip_anchor_task_m"
+                if spec.tool_pose_feedback:
+                    f.attrs["collector_tip_tracking"] = "Oracle tool root pose + known loop engagement point; horizontal travel tracking, 1 mm/s and +/-12 mm integral correction; no box pose servo."
+                f.attrs["loaded_box_setup"] = "Rail-free rigid tray and integral loop on level table; prepared hook inside loop with clearance; fixed ballast represented by effective rigid-body mass."
+                f.attrs["effective_object_surface_friction"] = spec.support_friction
+                f.attrs["loop_height_m"] = float(world.loop_center_task[2] - world.floor_z)
+                f.attrs["object_friction_falloff_m_s"] = float(
+                    world.slider.get_contact_params().friction_falloff_vel
+                )
+                if hasattr(world, "initial_sampled_overlap_m"):
+                    f.attrs["initial_sampled_overlap_m"] = world.initial_sampled_overlap_m
+            if spec.family in ("levering", "pushing") or (
+                spec.family == "hook" and spec.load_mode == "friction"
+            ):
+                if hasattr(world, "goal_object_com_pose_world"):
+                    f.attrs["goal_object_com_pose_world"] = (
+                        world.goal_object_com_pose_world
+                    )
+                    f.attrs["goal_pose_semantics"] = (
+                        "World COM xyz and xyzw quaternion; success uses XY position and yaw, with tilt/escape checked separately"
+                    )
+                f.attrs["collector_pose_feedback"] = True
+                f.attrs["collector_grasp_calibration_phase"] = (
+                    "One-time settled pre-motion tool translation; may include initial fulcrum support. Not model input."
+                )
+                f.attrs["oracle_channels"] += (
+                    ",flap_angle_rad,object_tilt_rad,object_position_error_m,object_yaw_error_rad,support_escape,support_penetration_m,collector_grasp_calibration_m,tool_environment_pair_wrenches,object_support_pair_wrenches"
+                )
+                f.attrs["contact_pair_order"] = json.dumps(
+                    [
+                        name
+                        for name, _, _, role in world.geometry
+                        if role == "environment"
+                    ]
+                )
+                f.attrs["pair_wrench_semantics"] = (
+                    "World axes; tool_environment ON TOOL about tool COM; object_support ON MOVED OBJECT about its COM; environment geometry order"
+                )
+                f.attrs["free_object_constraint"] = (
+                    "revolute gravity hinge"
+                    if spec.family == "levering" and spec.variant != "spatula_lift"
+                    else "none; six free DOFs, physical support contacts"
+                )
             camera = f["camera"]
             target = camera["target_world"][:]
             perturb = Rotation.from_euler(
@@ -1712,6 +2120,156 @@ def worker(payload, output, render=False):
 
 
 def specifications(phase):
+    if phase == "pose_transfer":
+        from diversification_repairs import preferred_pose_specs
+
+        return preferred_pose_specs()
+    if phase == "transfer_stop_controls":
+        base = next(
+            s
+            for s in specifications("transfer")
+            if s.family == "turning" and s.variant == "friction"
+        )
+        return [
+            replace(base, case=case, friction_torque_nm=load, rotor_stop_deg=stop)
+            for case, load, stop in (
+                ("low_no_stop", 0.015, None),
+                ("low_stop", 0.015, 90.0),
+                ("high_no_stop", 0.04, None),
+            )
+        ]
+    if phase in (
+        "transfer_prerequisites",
+        "transfer_composite",
+        "transfer_perturbations",
+        "transfer_negatives",
+        "transfer_solver",
+    ):
+        base = specifications("transfer")
+        by = {(s.family, s.variant): s for s in base}
+        if phase == "transfer_prerequisites":
+            return [
+                replace(by[key], physical_seed=i, group=f"repeat-{i}")
+                for key in (
+                    ("insertion", "key"),
+                    ("turning", "spring"),
+                    ("turning", "friction"),
+                )
+                for i in (1, 2)
+            ]
+        if phase == "transfer_composite":
+            return [
+                replace(
+                    by["turning", mode],
+                    family="composite",
+                    variant="key_sequence_" + mode,
+                    duration=0.0,
+                )
+                for mode in ("spring", "friction")
+            ]
+        selected = [
+            by[key]
+            for key in (
+                ("hook", "friction_normal"),
+                ("levering", "spatula_lift"),
+                ("pushing", "translation"),
+                ("turning", "friction"),
+            )
+        ]
+        if phase == "transfer_solver":
+            return [
+                replace(s, solver_iterations=16, solver_abs_tolerance=0.0005)
+                for s in selected
+            ]
+        if phase == "transfer_negatives":
+            return [
+                replace(
+                    s,
+                    # Turning begins seated: lateral offsets would place the
+                    # prepared key inside the socket wall. Use a valid seated
+                    # no-turn control; alignment failures belong to insertion.
+                    case="hold_control" if s.family == "turning" else "miss",
+                )
+                for s in selected
+            ]
+        return [
+            replace(
+                s,
+                case="perturbed",
+                physical_seed=i + 1,
+                group=f"condition-{i}",
+                support_friction=(0.25, 0.4, 0.6)[i],
+                sled_mass_kg=(0.15, 0.2, 0.25)[i],
+                flap_mass_kg=(0.075, 0.1, 0.125)[i],
+                object_mass_kg=(0.1, 0.15, 0.2)[i],
+                friction_torque_nm=(0.01, 0.015, 0.02)[i],
+                grip_force_n=(30.0, 32.5, 35.0)[i],
+            )
+            for s in selected
+            for i in range(3)
+        ]
+    if phase in ("transfer", "transfer_smoke"):
+        conditions = [
+            ("hook", "friction_normal"),
+            ("levering", "spatula_lift"),
+            ("pushing", "translation"),
+            ("pushing", "pose"),
+        ]
+        if phase == "transfer":
+            conditions += [("insertion", v) for v in PROFILES] + [
+                ("turning", v) for v in ("spring", "friction", "detent")
+            ]
+            conditions += [
+                ("surface", v)
+                for v in (
+                    "straight_slot",
+                    "curved_slot",
+                    "straight_wall",
+                    "rounded_wall",
+                    "concave_draw",
+                )
+            ]
+        return [
+            BenchmarkSpec(
+                revision=20,
+                family=f,
+                variant=v,
+                case="nominal",
+                load_mode="gravity"
+                if f == "levering"
+                else "friction"
+                if f in ("hook", "pushing") or v == "friction"
+                else v
+                if f == "turning"
+                else "spring",
+                profile_shape=v if f == "insertion" else "key",
+                mirror_fixture=v == "friction_mirrored",
+                duration=7.0 if phase == "transfer_smoke" else 0.0,
+                max_wall_s=5400.0,
+                speed_scale=0.75,
+                turn_command_deg=100.0,
+                rotor_stop_deg=90.0 if f == "turning" else None,
+                friction_torque_nm=0.04,
+                hook_heading_deg=90.0 if f == "hook" else 0.0,
+                hook_working_drop_m=0.020 if f == "hook" else 0.0,
+                grasp_depth_m=0.018 if v == "spatula_lift" else None,
+                spatula_edge_entry=v == "spatula_lift",
+                spatula_handle_height_m=0.024 if v == "spatula_lift" else 0.012,
+                spatula_grasp_x_m=0.035 if v == "spatula_lift" else 0.0,
+                spatula_entry_lift_m=0.015 if v == "spatula_lift" else 0.010,
+                spatula_contact_friction=0.15 if v == "spatula_lift" else None,
+                solver_iterations=8,
+                effective_friction=True,
+                rotor_bearing_contact=False,
+                push_heading_deg=90.0 if f == "pushing" else 0.0,
+                pusher_bottom_m=-0.059 if f == "pushing" else -0.055,
+                lever_tip_x_m=0.16,
+                lever_angle_deg=35.0,
+                lever_base_front_m=0.084,
+                transfer_support_collider="analytic_box" if f == "hook" else "mesh",
+            )
+            for f, v in conditions
+        ]
     if phase == "screen":
         return [replace(s, block="screen") for s in specifications("canonical")[1::6]]
     if phase == "qualification":
@@ -1905,7 +2463,7 @@ def specifications(phase):
     return specs
 
 
-def composite_gate(records):
+def composite_gate(records, load_mode="spring", revision=None, geometry=None):
     """Nominal geometry, not a literal case-name test across older recipes."""
     evidence = {}
     for family in ("insertion", "turning"):
@@ -1931,7 +2489,11 @@ def composite_gate(records):
             if (
                 s["family"] == family
                 and s["profile_shape"] == "key"
-                and s["load_mode"] == "spring"
+                and (family == "insertion" or s["load_mode"] == load_mode)
+                and (revision is None or s.get("revision") == revision)
+                and (
+                    geometry is None or all(s.get(k) == v for k, v in geometry.items())
+                )
                 and nominal
                 and m["physical_valid"]
                 and m["task_success"]
@@ -1975,6 +2537,16 @@ def run(args):
         if args.specs
         else specifications(args.recipe or args.phase)
     )
+    if getattr(args, "families", None):
+        specs = [s for s in specs if s.family in args.families]
+    if getattr(args, "variants", None):
+        specs = [s for s in specs if s.variant in args.variants]
+    if getattr(args, "max_wall_s", None) is not None:
+        if not np.isfinite(args.max_wall_s) or args.max_wall_s <= 0:
+            raise ValueError("positive finite wall-time budget required")
+        specs = [replace(s, max_wall_s=args.max_wall_s) for s in specs]
+    if not specs:
+        raise ValueError("No task specifications selected")
     if args.limit:
         specs = specs[: args.limit]
     gate_evidence = None
@@ -1995,7 +2567,27 @@ def run(args):
                 if s["family"] in ("insertion", "turning") and episode.exists():
                     record["metrics"].update(completion_from_file(episode, s))
                 records.append(record)
-        gate_evidence = composite_gate(records)
+        gate_evidence = {}
+        for composite in (s for s in specs if s.family == "composite"):
+            geometry = {
+                k: getattr(composite, k)
+                for k in (
+                    "scale",
+                    "tip_scale",
+                    "shaft_diameter_m",
+                    "tip_length_m",
+                    "handle_width_m",
+                    "handle_depth_m",
+                    "clearance_m",
+                    "chamfer_m",
+                )
+            }
+            gate_evidence[composite.load_mode] = composite_gate(
+                records,
+                composite.load_mode,
+                composite.revision if composite.revision >= 19 else None,
+                geometry if composite.revision >= 19 else None,
+            )
         gate_evidence["prerequisite_output"] = str(prerequisite.resolve())
         gate_evidence["scope"] = (
             "Existing independent stage qualification; new composite mechanics still require their own checks."
@@ -2038,6 +2630,9 @@ def run(args):
 
     for name in (
         "benchmark.py",
+        "diversification.py",
+        "transfer_world.py",
+        "loaded_box.py",
         "benchmark_geometry.py",
         "benchmark_observations.py",
         "benchmark_report.py",
@@ -2098,6 +2693,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
     parser.add_argument("--phase", default="screen")
+    parser.add_argument(
+        "--variants", nargs="+", help="Select named variants within the chosen recipe"
+    )
     parser.add_argument("--specs")
     parser.add_argument(
         "--recipe",
@@ -2109,10 +2707,37 @@ if __name__ == "__main__":
             "randomized",
             "composite",
             "sensing",
+            "transfer",
+            "transfer_smoke",
+            "transfer_prerequisites",
+            "transfer_composite",
+            "transfer_perturbations",
+            "transfer_negatives",
+            "transfer_solver",
+            "transfer_stop_controls",
+            "pose_transfer",
         ),
     )
     parser.add_argument("--workers", type=int, default=min(12, os.cpu_count() or 1))
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--max-wall-s",
+        type=float,
+        help="Per-episode wall budget override; changes no physics or task criteria",
+    )
+    parser.add_argument(
+        "--families",
+        nargs="+",
+        choices=(
+            "surface",
+            "hook",
+            "insertion",
+            "turning",
+            "composite",
+            "levering",
+            "pushing",
+        ),
+    )
     parser.add_argument("--render", action="store_true")
     parser.add_argument(
         "--prerequisite-output",

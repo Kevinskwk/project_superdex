@@ -11,7 +11,7 @@ import imageio_ffmpeg
 
 from benchmark import PROFILES, SURFACES
 from benchmark_geometry import episode_eligibility
-from benchmark_report import summarize
+from benchmark_report import summarize, geometry_audit
 
 
 def expected_variants():
@@ -40,10 +40,17 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def package(root, selection, output):
+def package(root, selection, output, review=False):
     root = root.resolve()
     chosen = json.loads(selection.read_text())
-    validate_coverage(chosen)
+    if not review:
+        validate_coverage(chosen)
+    elif not chosen or len({(r["family"], r["variant"]) for r in chosen}) != len(
+        chosen
+    ):
+        raise ValueError(
+            "Review selection must be nonempty with unique family/variant pairs"
+        )
     if output.exists():
         raise FileExistsError(
             "Use a new gallery directory; never overwrite reviewed media"
@@ -57,7 +64,11 @@ def package(root, selection, output):
         spec, metrics = record["spec"], record["metrics"]
         if (spec["family"], spec["variant"]) != (item["family"], item["variant"]):
             raise ValueError(f"Selection label does not match {source}")
-        if not episode_eligibility(metrics)["imitation_eligible"]:
+        accepted = episode_eligibility(metrics)["imitation_eligible"]
+        geometry = geometry_audit(source) if review else None
+        if geometry is not None:
+            accepted &= geometry["passed"]
+        if not accepted and not review:
             raise ValueError(f"Not an accepted successful full episode: {source}")
         movie = source.with_name(source.stem + "_rgb_tactile.mp4")
         if not movie.is_file():
@@ -93,13 +104,17 @@ def package(root, selection, output):
                 episode=str(source.relative_to(root)),
                 episode_id=spec["episode_id"],
                 source_movie=str(movie.relative_to(root)),
-                video=f"{spec['family']}__{spec['variant']}.mp4",
+                video=f"{spec['family']}__{spec['variant']}"
+                + ("__NOT_PASSED" if not accepted else "")
+                + ".mp4",
                 episode_sha256=sha256(source),
                 video_sha256=sha256(movie),
                 duration_s=meta["duration"],
                 fps=meta["fps"],
                 frame_size=meta["size"],
                 metrics=metrics,
+                sampled_geometry_review=geometry,
+                passed_review=bool(accepted),
             )
         )
         print(f"Verified {spec['family']}/{spec['variant']}", flush=True)
@@ -113,7 +128,9 @@ def package(root, selection, output):
         schema="superdex_representative_gallery_v1",
         campaign=str(root),
         video_source="Original captured simulator RGB + synchronized tactile; byte-identical copies",
-        scope="18 isolated nominal variants plus one composite; feasibility, not robustness qualification",
+        scope="Development review: NOT_PASSED movies are failures or incomplete checks, not qualified demonstrations."
+        if review
+        else "18 isolated nominal variants plus one composite; feasibility, not robustness qualification",
         episodes=rows,
     )
     (output / "manifest.json").write_text(json.dumps(payload, indent=2) + "\n")
@@ -150,5 +167,10 @@ if __name__ == "__main__":
         default=Path(__file__).with_name("representative_episodes.json"),
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Package a labeled development subset, including failed checks; never claim full benchmark coverage",
+    )
     args = parser.parse_args()
-    package(args.campaign, args.selection, args.output)
+    package(args.campaign, args.selection, args.output, args.review)

@@ -66,12 +66,20 @@ class Recorder:
         draw.text(
             (16, 44),
             (
-                f"insertion {row['insertion_depth_m'] * 1000:.1f} mm"
-                if getattr(self.world.spec, "stage", None) == "insertion" and getattr(self.world.spec, "family", "insertion") in ("insertion", "composite")
+                f"pancake lift {row['task_progress'] * 1000:.1f} mm"
+                if getattr(self.world.spec, "variant", "") == "spatula_lift"
+                else f"flap {np.rad2deg(row['flap_angle_rad']):.1f} deg"
+                if getattr(self.world.spec, "family", "") == "levering"
+                else f"goal error {row['object_position_error_m'] * 1000:.1f} mm / {np.rad2deg(row['object_yaw_error_rad']):.1f} deg"
+                if getattr(self.world.spec, "family", "") == "pushing"
+                else f"insertion {row['insertion_depth_m'] * 1000:.1f} mm"
+                if getattr(self.world.spec, "stage", None) == "insertion"
+                and getattr(self.world.spec, "family", "insertion")
+                in ("insertion", "composite")
                 else f"rotor {np.rad2deg(row['task_progress']):.1f} deg"
                 if getattr(self.world.spec, "kind", None) == "key"
                 else f"working tip X {row['working_tip_task_m'][0] * 1000:.1f} mm"
-                if 'working_tip_task_m' in row
+                if "working_tip_task_m" in row
                 else f"progress {row['task_progress'] * 1000:.1f} mm"
             )
             + f" | slip {row['slip_m'] * 1000:.2f} mm",
@@ -82,9 +90,17 @@ class Recorder:
             "Actual simulator RGB; prepared grasp, freely held after 1 s",
             fill="black",
         )
-        if 'blade_contact_force_n' in row:
-            draw.text((1130,420),f"Blade contact: {row['blade_contact_force_n']:.2f} N",fill='white')
-            draw.text((1130,442),f"Holder contact: {row['holder_contact_force_n']:.2f} N",fill='white')
+        if "blade_contact_force_n" in row:
+            draw.text(
+                (1130, 420),
+                f"Blade contact: {row['blade_contact_force_n']:.2f} N",
+                fill="white",
+            )
+            draw.text(
+                (1130, 442),
+                f"Holder contact: {row['holder_contact_force_n']:.2f} N",
+                fill="white",
+            )
         for j, s in enumerate(("left", "right")):
             panel = Image.fromarray(
                 render_shear_field(
@@ -173,9 +189,12 @@ class Recorder:
     def close(self, data):
         self.writer.close()
         self.viewer.close()
-        plot_episode(data, Path(str(self.path) + "_wrenches.png"),
-                     task_kind=getattr(self.world.spec, "kind", None),
-                     task_stage=getattr(self.world.spec, "stage", None))
+        plot_episode(
+            data,
+            Path(str(self.path) + "_wrenches.png"),
+            task_kind=getattr(self.world.spec, "kind", None),
+            task_stage=getattr(self.world.spec, "stage", None),
+        )
 
 
 def plot_episode(d, path, task_kind=None, task_stage=None):

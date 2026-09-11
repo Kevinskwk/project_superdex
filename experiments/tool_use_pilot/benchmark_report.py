@@ -170,12 +170,24 @@ def geometry_audit(path):
             )
             for i, m in meshes.items()
         }
+        spec = json.loads(f.attrs["config_json"])
+        pairs = {(0, j) for j in indices if j != 0}
+        if spec["family"] in ("levering", "pushing") or (
+            spec["family"] == "hook" and spec.get("load_mode") == "friction"
+        ):
+            poses_all = d["body_root_poses"][:]
+            moving = [
+                i
+                for i in indices
+                if i != 0 and np.ptp(poses_all[:, i], axis=0).max() > 1e-5
+            ]
+            pairs |= {tuple(sorted((i, j))) for i in moving for j in indices if i != j}
         results = []
         for frame in frames:
             poses = d["body_root_poses"][frame]
             peak = 0.0
-            for j in indices[1:]:
-                for source, target in ((0, j), (j, 0)):
+            for a, b in sorted(pairs):
+                for source, target in ((a, b), (b, a)):
                     points = (
                         Rotation.from_quat(poses[source, 3:]).apply(samples[source])
                         + poses[source, :3]
@@ -198,9 +210,11 @@ def geometry_audit(path):
             )
         return dict(
             closed=closed,
+            passed=max(r["sampled_overlap_mm"] for r in results) <= 1.0,
             max_sampled_overlap_mm=max(r["sampled_overlap_mm"] for r in results),
             frames=results,
-            note="Independent sampled diagnostic, not proof of zero intersection; initialization included.",
+            pairs_checked=sorted(pairs),
+            note="Independent sampled diagnostic, not proof of zero intersection; initialization included. Transfer free-body/flap support contacts included.",
         )
 
 
@@ -210,6 +224,48 @@ def summarize(path):
         spec = json.loads(f.attrs["config_json"])
         m = json.loads(f.attrs["metrics_json"])
         d = f["observations"]
+        if spec["family"] in ("levering", "pushing") or (
+            spec["family"] == "hook" and spec.get("load_mode") == "friction"
+        ):
+            from benchmark import BenchmarkSpec
+            from transfer_world import transfer_audit
+
+            # Recheck the recorded endpoint; reaching a goal briefly is not a
+            # successful full rollout, and a construction smoke is not a task.
+            audit_data = {
+                key: d[key][:]
+                for key in (
+                    "initialization",
+                    "object_tilt_rad",
+                    "support_escape",
+                    "object_position_error_m",
+                    "object_yaw_error_rad",
+                    "flap_angle_rad",
+                    "task_progress",
+                )
+            }
+            audit_data["phase"] = d["phase"].asstr()[:]
+            if spec["variant"] == "spatula_lift":
+                # Independently recompute free pancake tilt, including early
+                # development snapshots predating the online tilt diagnostic.
+                env_ids = [
+                    int(k)
+                    for k, g in f["geometry"].items()
+                    if g.attrs["role"] == "environment"
+                ]
+                pancake_id = env_ids[-1]
+                q = d["body_root_poses"][:, pancake_id, 3:]
+                normals = Rotation.from_quat(q).apply(
+                    np.tile([0.0, 0.0, 1.0], (len(q), 1))
+                )
+                audit_data["object_tilt_rad"] = np.arccos(np.clip(normals[:, 2], -1, 1))
+            checked = transfer_audit(audit_data, BenchmarkSpec(**spec), m)
+            m["recorded_task_success"] = m["task_success"]
+            # Preserve recorder-level abort/finite/contact validity decisions.
+            checked["physical_valid"] &= m["physical_valid"]
+            checked["task_success"] &= checked["physical_valid"]
+            m.update(checked)
+            m.update(episode_eligibility(m))
         if spec["family"] in ("insertion", "turning", "composite"):
             completion = sequence_completion(
                 dict(
@@ -226,6 +282,23 @@ def summarize(path):
             m.update(completion)
             m["task_success"] &= completion["sequence_complete"]
             m["imitation_eligible"] &= m["task_success"]
+            if (
+                spec["family"] == "turning"
+                and spec.get("revision", 0) >= 19
+                and abs(spec.get("lateral_m", 0)) > spec["clearance_m"]
+            ):
+                # Prepared-seated turning is not a collision-free insertion
+                # approach. Keep these development records out of model data.
+                m["contact_model_review_required"] = True
+                m["prepared_seat_geometry_note"] = (
+                    "Prepared-seat lateral offset exceeds pocket clearance; "
+                    "not a valid misalignment negative without geometry review."
+                )
+                initial_geometry = geometry_audit(path)
+                m["prepared_seat_geometry_audit"] = initial_geometry
+                m["recorded_physical_valid"] = m["physical_valid"]
+                m["physical_valid"] &= initial_geometry["passed"]
+                m.update(episode_eligibility(m))
             m.pop("max_progress_mm", None)
         independent = None
         if spec["family"] == "surface":
@@ -342,6 +415,25 @@ def summarize(path):
             float(np.linalg.norm(truth[active, 3:5], axis=1).mean()),
             float(np.abs(truth[active, 5]).mean()),
         ]
+        if "solver_convergence_status" in d:
+            status, counts = np.unique(
+                d["solver_convergence_status"][:], return_counts=True
+            )
+            residual = d["solver_residual_norm"][:]
+            data["solver_diagnostics"] = dict(
+                status_counts={str(int(k)): int(v) for k, v in zip(status, counts)},
+                status_labels={
+                    "0": "NONE",
+                    "1": "CONVERGED",
+                    "2": "STOPPED",
+                    "3": "DIVERGED",
+                },
+                residual_p50=float(np.median(residual)),
+                residual_p95=float(np.quantile(residual, 0.95)),
+                residual_max=float(residual.max()),
+                max_nonlinear_iterations=int(d["solver_nonlinear_iterations"][:].max()),
+                note="Native solver diagnostics; residual units/termination reason are not inferred. Cross-setting trajectory agreement is a sensitivity check, not a convergence certificate.",
+            )
         if spec["family"] == "surface" and "per_contact_coulomb_excess_n" in d:
             follow = phase == "follow"
             if follow.any():
@@ -462,7 +554,15 @@ def branch_audit(root):
 
 def wrench_plot(rows, path):
     selected = []
-    for family in ("surface", "hook", "insertion", "turning", "composite"):
+    for family in (
+        "surface",
+        "hook",
+        "insertion",
+        "turning",
+        "composite",
+        "levering",
+        "pushing",
+    ):
         good = [
             r
             for r in rows
@@ -697,7 +797,15 @@ def report(root, mesh=False):
         )
     audits = {}
     if mesh:
-        for family in ("surface", "hook", "insertion", "turning", "composite"):
+        for family in (
+            "surface",
+            "hook",
+            "insertion",
+            "turning",
+            "composite",
+            "levering",
+            "pushing",
+        ):
             variants = sorted(
                 {r["spec"]["variant"] for r in rows if r["spec"]["family"] == family}
             )

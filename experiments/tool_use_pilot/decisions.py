@@ -282,7 +282,7 @@ class HookDecision(World):
         self.recovery_wait = 0.0
         self.controller_abort = ""
         self.nominal_tool_target = np.zeros(3)
-        if spec.kind == "hook" and spec.task == "hook":
+        if spec.kind == "hook" and spec.task == "hook" and not hasattr(self, "environment_meshes"):
             self.environment_meshes = [
                 self.make_slider_mesh(),
                 trimesh.creation.box([0.16, 0.09, 0.012]),
