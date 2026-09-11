@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import tempfile
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -20,28 +21,10 @@ import trimesh
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parents[1]
 DEFAULT_ROOT = PROJECT_ROOT / "assets" / "scfields"
-HF_BASE = "https://huggingface.co/datasets/Kevinskwk/scfields-release/resolve/main"
-TOOL_METADATA = "assets/tools/yaml/tool_asset_info.yaml"
-REGULAR_FAMILIES = (
-    "cylinder",
-    "rectangle",
-    "hex_prism",
-    "scraper",
-    "cylinder_pen",
-    "hex_pen",
-    "square_pen",
-)
-RAW_PEELERS = ("peeler_7", "peeler_1", "peeler_10")
-COMBINED_PEELERS = (
-    "peeler_1_head_rectangular_handle_h0_96_hnd0_99",
-    "peeler_6_head_tool_cylinder_6_h0_90_hnd1_03",
-    "peeler_11_head_tool_hex_prism_12_h0_90_hnd1_02",
-)
-DEFAULT_CAPSULE_ROOT = Path(
-    os.environ.get(
-        "SCFIELDS_CAPSULE_ROOT",
-        PROJECT_ROOT.parent / "tacsl" / "IsaacGymEnvs" / "assets" / "shapes" / "mesh",
-    )
+LOCK_PATH = HERE / "scfields_assets.lock.json"
+HF_REVISION = "923c0b409f65eaefec9ae1ffd5c695aa8aa6d7ca"
+HF_BASE = (
+    f"https://huggingface.co/datasets/Kevinskwk/scfields-release/resolve/{HF_REVISION}"
 )
 
 
@@ -53,69 +36,35 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download(relative_path: str, destination: Path) -> None:
+def download(relative_path: str, destination: Path, expected: str) -> None:
+    """Fetch immutable input; never accept corrupt caches or publish partial files."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() and destination.stat().st_size:
+    if destination.exists():
+        if sha256(destination) != expected:
+            raise ValueError(
+                f"Source checksum mismatch; preserve/inspect this file: {destination}"
+            )
         return
     url = f"{HF_BASE}/{urllib.parse.quote(relative_path, safe='/')}"
-    partial = destination.with_suffix(destination.suffix + ".partial")
     request = urllib.request.Request(url, headers={"User-Agent": "superdex-scfields/1"})
-    with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as out:
-        shutil.copyfileobj(response, out)
-    partial.replace(destination)
+    with tempfile.TemporaryDirectory(
+        prefix=".download-", dir=destination.parent
+    ) as tmp:
+        partial = Path(tmp) / "asset"
+        with (
+            urllib.request.urlopen(request, timeout=45) as response,
+            partial.open("wb") as out,
+        ):
+            shutil.copyfileobj(response, out)
+        if sha256(partial) != expected:
+            raise ValueError(f"Downloaded source checksum mismatch: {relative_path}")
+        # Same-filesystem hard link publishes atomically without replacing a cache.
+        os.link(partial, destination)
 
 
-def parse_simple_tool_yaml(path: Path) -> dict[str, dict[str, Any]]:
-    """Parse the flat generated tool metadata without adding a YAML dependency."""
-    result: dict[str, dict[str, Any]] = {}
-    current: dict[str, Any] | None = None
-    for raw in path.read_text().splitlines():
-        line = raw.split("#", 1)[0].rstrip()
-        if not line or line == "tools:":
-            continue
-        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
-            name = line.strip()[:-1]
-            current = result.setdefault(name, {})
-            continue
-        if current is None or not line.startswith("    ") or ":" not in line:
-            continue
-        key, value = (part.strip() for part in line.split(":", 1))
-        if value in ("", "null", "None"):
-            current[key] = None
-        else:
-            try:
-                current[key] = float(value) if any(c in value for c in ".eE") else int(value)
-            except ValueError:
-                current[key] = value.strip("'\"")
-    return result
-
-
-def select_regular_tools(metadata: dict[str, dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
-    selected: list[tuple[str, dict[str, Any]]] = []
-    for family in REGULAR_FAMILIES:
-        candidates = [
-            (name, values)
-            for name, values in metadata.items()
-            if values.get("tool_type") == family
-            and 0.022
-            <= float(values["width"] if family in {"hex_prism", "hex_pen"} else values["thickness"])
-            <= 0.030
-        ]
-        if len(candidates) < 3:
-            raise RuntimeError(f"SCFields metadata has too few feasible {family} tools")
-        candidates.sort(
-            key=lambda item: float(item[1]["length"])
-            * float(item[1]["thickness"])
-            * float(item[1]["width"])
-        )
-        for quantile, label in ((0.1, "small"), (0.5, "median"), (0.9, "large")):
-            index = int(round(quantile * (len(candidates) - 1)))
-            name, values = candidates[index]
-            selected.append((name, {**values, "size_quantile": label}))
-    return selected
-
-
-def _canonical_regular(mesh: trimesh.Trimesh, metadata: dict[str, Any]) -> tuple[trimesh.Trimesh, np.ndarray]:
+def _canonical_regular(
+    mesh: trimesh.Trimesh, metadata: dict[str, Any]
+) -> tuple[trimesh.Trimesh, np.ndarray]:
     vertices = np.asarray(mesh.vertices, dtype=float).copy()
     if metadata.get("tool_type") in {"hex_prism", "hex_pen"}:
         # The authored hexagon's wider transverse axis is X. Put it on the
@@ -128,7 +77,9 @@ def _canonical_regular(mesh: trimesh.Trimesh, metadata: dict[str, Any]) -> tuple
     return canonical, grasp
 
 
-def _canonical_peeler(mesh: trimesh.Trimesh, grasp_offset: float = 0.05) -> tuple[trimesh.Trimesh, np.ndarray]:
+def _canonical_peeler(
+    mesh: trimesh.Trimesh, grasp_offset: float = 0.05
+) -> tuple[trimesh.Trimesh, np.ndarray]:
     vertices = np.asarray(mesh.vertices, dtype=float)
     centered = vertices - vertices.mean(axis=0)
     _, _, vh = np.linalg.svd(centered, full_matrices=False)
@@ -178,7 +129,9 @@ def _mesh_record(
     if not isinstance(loaded, trimesh.Trimesh) or len(loaded.faces) == 0:
         raise RuntimeError(f"{source} did not contain a triangular mesh")
     if family == "peeler":
-        canonical, grasp_source = _canonical_peeler(loaded, float(metadata.get("grasp_offset", 0.05)))
+        canonical, grasp_source = _canonical_peeler(
+            loaded, float(metadata.get("grasp_offset", 0.05))
+        )
     else:
         canonical, grasp_source = _canonical_regular(loaded, metadata)
     canonical.remove_unreferenced_vertices()
@@ -246,97 +199,174 @@ def _mesh_record(
     }
 
 
-def prepare(root: Path = DEFAULT_ROOT, capsule_root: Path = DEFAULT_CAPSULE_ROOT) -> Path:
-    source_root = root / "source"
-    canonical_root = root / "canonical"
-    metadata_path = source_root / "tools" / "tool_asset_info.yaml"
-    download(TOOL_METADATA, metadata_path)
-    metadata = parse_simple_tool_yaml(metadata_path)
-    records: list[dict[str, Any]] = []
-    for name, values in select_regular_tools(metadata):
-        family = str(values["tool_type"])
-        relative = f"assets/tools/mesh/{family}/{name}.obj"
-        source = source_root / "tools" / family / f"{name}.obj"
-        download(relative, source)
-        records.append(
-            _mesh_record(name, family, source, canonical_root / f"{name}.obj", values, relative)
-        )
-    for name in RAW_PEELERS:
-        relative = f"assets/peeler_raw/mesh/{name}/downsampled.obj"
-        source = source_root / "peelers" / f"{name}.obj"
-        download(relative, source)
-        records.append(
-            _mesh_record(
-                name, "peeler", source, canonical_root / f"{name}.obj",
-                {"density": 1200.0, "friction": 1.0, "grasp_offset": 0.05}, relative,
-            )
-        )
-    for name in COMBINED_PEELERS:
-        relative = f"assets/peeler_combined/mesh/{name}.obj"
-        source = source_root / "peelers_combined" / f"{name}.obj"
-        download(relative, source)
-        records.append(
-            _mesh_record(
-                name, "peeler", source, canonical_root / f"{name}.obj",
-                {"density": 1200.0, "friction": 1.0, "grasp_offset": 0.05}, relative,
-            )
-        )
-    capsules = []
-    for index in (1, 10, 28):
-        source = capsule_root / f"capsule_{index}.obj"
-        if not source.exists():
-            raise FileNotFoundError(
-                f"required SCFields capsule is missing: {source}; pass --capsule-root "
-                "or set SCFIELDS_CAPSULE_ROOT"
-            )
-        destination = source_root / "capsules" / source.name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-        capsules.append(
-            {
-                "name": f"capsule_{index}",
-                "source_path": str(source),
-                "path": str(destination.resolve()),
-                "sha256": sha256(destination),
-            }
-        )
-    manifest = {
-        "schema_version": "scfields_superdex_assets_v1",
-        "source_repository": "https://github.com/Kevinskwk/SCFields",
-        "source_dataset": "https://huggingface.co/datasets/Kevinskwk/scfields-release",
-        "selection": "volume quantiles 0.1/0.5/0.9 after 22-30 mm grasp-width filter",
-        "tools": records,
-        "capsules": capsules,
-    }
+def asset_lock() -> dict[str, Any]:
+    lock = json.loads(LOCK_PATH.read_text())
+    if lock["revision"] != HF_REVISION:
+        raise ValueError("Asset lock and downloader revision disagree")
+    return lock
+
+
+def _local_path(root: Path, record: dict, field: str) -> Path:
+    """Resolve new relative paths or relocate legacy workstation absolute paths."""
+    value = Path(record[field])
+    if value.is_absolute():
+        # Never reach back into another checkout just because that old path exists.
+        parts = value.parts
+        if "scfields" not in parts:
+            raise ValueError(f"Cannot relocate legacy asset path: {value}")
+        value = Path(*parts[parts.index("scfields") + 1 :])
+    resolved = (root / value).resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise ValueError(f"Asset path escapes manifest root: {value}")
+    return resolved
+
+
+def prepare(root: Path = DEFAULT_ROOT, capsule_root: Path | None = None) -> Path:
+    """Rebuild the exact 27 tools used by the recorded experiments.
+
+    Primitive task fixtures are generated by the benchmark, not downloaded here.
+    Historical capsule copies are optional and are not used by the current pilot.
+    Existing complete caches are checked and reused, never silently overwritten.
+    """
+    root = root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
     manifest_path = root / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    if manifest_path.exists():
+        load_manifest(manifest_path)
+        return manifest_path
+    lock = asset_lock()
+    records = []
+    # Only promote generated meshes after ALL locked hashes match.
+    with tempfile.TemporaryDirectory(prefix=".prepare-", dir=root) as tmp:
+        staging = Path(tmp)
+        for entry in lock["tools"]:
+            name = entry["name"]
+            source = root / "source" / (name + ".obj")
+            download(entry["source"], source, entry["source_sha256"])
+            values = dict(
+                tool_type=entry["family"],
+                density=entry["density_kg_m3"],
+                friction=entry["friction"],
+                grasp_offset=entry["grasp_offset_m"],
+                size_quantile=entry["size_quantile"],
+            )
+            record = _mesh_record(
+                name,
+                entry["family"],
+                source,
+                staging / "canonical" / (name + ".obj"),
+                values,
+                entry["source"],
+            )
+            for field in ("canonical", "surface"):
+                if record[field + "_sha256"] != entry[field + "_sha256"]:
+                    raise ValueError(
+                        f"Generated {field} mismatch for {name}; use pinned generation dependencies"
+                    )
+                path = Path(record[field + "_path"])
+                record[field + "_path"] = str(path.relative_to(staging))
+            record["source_path"] = str(source.relative_to(root))
+            records.append(record)
+        for record in records:
+            for field in ("canonical_path", "surface_path"):
+                relative = record[field]
+                target = root / relative
+                expected = record[field.replace("_path", "_sha256")]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    if sha256(target) != expected:
+                        raise ValueError(
+                            f"Refusing to overwrite modified mesh: {target}"
+                        )
+                else:
+                    os.link(staging / relative, target)
+    capsules = []
+    if capsule_root is not None:
+        # Explicit legacy option only; absence must not require a TacSL checkout.
+        for index in (1, 10, 28):
+            source = capsule_root / f"capsule_{index}.obj"
+            target = root / "source/capsules" / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            expected = sha256(source)
+            if target.exists() and sha256(target) != expected:
+                raise ValueError(f"Refusing to overwrite capsule: {target}")
+            if not target.exists():
+                shutil.copy2(source, target)
+            capsules.append(
+                dict(
+                    name=source.stem,
+                    path=str(target.relative_to(root)),
+                    sha256=expected,
+                )
+            )
+    manifest = dict(
+        schema_version="scfields_superdex_assets_v1",
+        source_repository="https://github.com/Kevinskwk/SCFields",
+        source_dataset=lock["source_dataset"],
+        source_revision=lock["revision"],
+        asset_lock_sha256=sha256(LOCK_PATH),
+        license=lock["license"],
+        selection="Frozen recorded 27-tool selection; exact source/collision/surface hashes",
+        benchmark_tools=lock["benchmark_tools"],
+        tools=records,
+        capsules=capsules,
+    )
+    with manifest_path.open("x") as out:
+        json.dump(manifest, out, indent=2)
+        out.write("\n")
+    load_manifest(manifest_path)
     return manifest_path
 
 
 def load_manifest(path: Path = DEFAULT_ROOT / "manifest.json") -> dict[str, Any]:
+    """Check pinned assets and return resolved paths without rewriting the file."""
+    path = Path(path)
     manifest = json.loads(path.read_text())
     if manifest.get("schema_version") != "scfields_superdex_assets_v1":
         raise ValueError(f"unsupported SCFields asset manifest: {path}")
+    lock = asset_lock()
+    expected = {r["name"]: r for r in lock["tools"]}
+    if [r["name"] for r in manifest["tools"]] != list(expected):
+        raise ValueError(
+            "SCFields selection/order differs from the recorded asset lock"
+        )
     for record in manifest["tools"]:
-        canonical = Path(record["canonical_path"])
-        if not canonical.exists() or sha256(canonical) != record["canonical_sha256"]:
-            raise ValueError(f"missing or modified canonical SCFields asset: {canonical}")
-        surface = Path(record.get("surface_path", record["canonical_path"]))
-        if not surface.exists() or sha256(surface) != record.get(
-            "surface_sha256", record["canonical_sha256"]
-        ):
-            raise ValueError(f"missing or modified SCFields surface asset: {surface}")
+        entry = expected[record["name"]]
+        for field in ("canonical", "surface", "source"):
+            filename = _local_path(path.parent, record, field + "_path")
+            digest = entry[field + "_sha256"]
+            if record[field + "_sha256"] != digest:
+                raise ValueError(
+                    f"Manifest checksum differs from lock: {record['name']}/{field}"
+                )
+            if not filename.is_file() or sha256(filename) != digest:
+                raise ValueError(
+                    f"Missing or modified SCFields {field} asset: {filename}"
+                )
+            record[field + "_path"] = str(filename)
+    for record in manifest.get("capsules", []):
+        record["path"] = str(_local_path(path.parent, record, "path"))
+    manifest["benchmark_tools"] = lock["benchmark_tools"]
     return manifest
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_ROOT)
-    parser.add_argument("--capsule-root", type=Path, default=DEFAULT_CAPSULE_ROOT)
+    parser.add_argument(
+        "--check", action="store_true", help="Offline checksum check only"
+    )
+    parser.add_argument(
+        "--capsule-root", type=Path, help="Optional legacy capsule copies"
+    )
     args = parser.parse_args()
-    path = prepare(args.output.resolve(), args.capsule_root.resolve())
+    path = (
+        args.output.resolve() / "manifest.json"
+        if args.check
+        else prepare(args.output.resolve(), args.capsule_root)
+    )
     manifest = load_manifest(path)
-    print(f"prepared {len(manifest['tools'])} tools at {path}")
+    print(f"verified {len(manifest['tools'])} pinned tools at {path}")
 
 
 if __name__ == "__main__":

@@ -1201,11 +1201,11 @@ class SurfaceWorld(BenchmarkMixin, HookDecision):
             if "scrape" in s.variant
             else "cylinder_pen"
         )
-        manifest = json.loads(
-            (HERE.parents[1] / "assets/scfields/manifest.json").read_text()
-        )
-        choices = [r for r in manifest["tools"] if r["family"] == family]
-        self.asset_record = choices[len(choices) // 2]
+        from scfields_assets import load_manifest
+
+        manifest = load_manifest(HERE.parents[1] / "assets/scfields/manifest.json")
+        name = manifest["benchmark_tools"][family]
+        self.asset_record = next(r for r in manifest["tools"] if r["name"] == name)
         mesh = trimesh.load(
             self.asset_record["canonical_path"], force="mesh", process=False
         )
@@ -2641,10 +2641,14 @@ def run(args):
         "pilot.py",
         "decisions.py",
         "key_stages.py",
+        "requirements-simulation.txt",
     ):
         shutil.copy2(HERE / name, snapshot / name)
     gel_code = HERE.parent / "gelsight_mini_contact_validation"
-    for name in ("soft_gripper.py", "tactile_grid.py", "wrench_math.py"):
+    for name in (
+        "soft_gripper.py", "tactile_grid.py", "wrench_math.py",
+        "scfields_assets.py", "scfields_assets.lock.json",
+    ):
         shutil.copy2(gel_code / name, snapshot / name)
     gel_assets = HERE.parents[1] / "assets/bots/grippers/franka_gelsight_mini"
     for name in (
